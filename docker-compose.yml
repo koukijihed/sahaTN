@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sahatn_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-sahatn}
+      POSTGRES_USER: ${DB_USER:-sahatn}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sahatn}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sahatn
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sahatn} -d ${DB_NAME:-sahatn}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sahatn_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 4000
+      API_PREFIX: api
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      DATABASE_URL: postgresql://${DB_USER:-sahatn}:${DB_PASSWORD:-sahatn}@postgres:5432/${DB_NAME:-sahatn}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-sahatn_session}
+      CSRF_COOKIE_NAME: ${CSRF_COOKIE_NAME:-sahatn_csrf}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-604800}
+      LOGIN_MAX_ATTEMPTS: ${LOGIN_MAX_ATTEMPTS:-5}
+      LOGIN_LOCK_MINUTES: ${LOGIN_LOCK_MINUTES:-15}
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sahatn
+    command: npm run start:dev
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sahatn_frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_APP_URL: ${APP_URL:-http://localhost:3000}
+      API_URL: http://backend:4000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    networks:
+      - sahatn
+    command: npm run dev
+
+volumes:
+  postgres_data:
+
+networks:
+  sahatn:
+    driver: bridge

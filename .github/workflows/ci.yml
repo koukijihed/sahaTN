@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend (NestJS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sahatn_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sahatn_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sahatn_test
+      THROTTLE_LIMIT: 100000
+      LOGIN_THROTTLE_LIMIT: 100000
+      REGISTER_THROTTLE_LIMIT: 100000
+      CORS_ORIGIN: http://localhost:3000
+      API_PREFIX: api
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+      - name: Env validation accepts a numeric string
+        run: |
+          node -e "require('reflect-metadata');const{validateEnv}=require('./dist/config/env.validation');const v=validateEnv({PORT:'4000'});if(v.PORT!==4000){process.exit(1)};console.log('PORT string accepted')"
+      - name: Env validation rejects invalid configuration
+        run: |
+          if timeout 30s env PORT=notaport node dist/main.js > env-invalid.log 2>&1; then
+            echo "::error::Expected startup to fail with an invalid PORT";
+            cat env-invalid.log;
+            exit 1
+          fi
+          if ! grep -q "PORT" env-invalid.log; then
+            echo "::error::The startup error should name the invalid variable";
+            cat env-invalid.log
+            exit 1
+          fi
+          echo "Invalid PORT correctly rejected; message names the variable."
+      - name: Dependency audit (informational)
+        run: npm audit --omit=dev --audit-level=high
+        continue-on-error: true
+      - name: Unit tests
+        run: npm test -- --maxWorkers=1 --no-coverage
+      - name: E2E tests (PostgreSQL service)
+        run: npx jest --config ./test/jest-e2e.json --runInBand --no-coverage
+      - name: Upload backend artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-logs
+          path: |
+            backend/env-invalid.log
+            backend/test-results/**
+          if-no-files-found: ignore
+          retention-days: 5
+
+  frontend:
+    name: Frontend (Next.js + Playwright)
+    runs-on: ubuntu-latest
+    needs: backend
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      CI: true
+      API_URL: http://localhost:4000
+      E2E_FRONTEND_PORT: 3100
+      E2E_BACKEND_PORT: 4000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - name: Install backend dependencies (for the Playwright web server)
+        run: npm ci
+        working-directory: backend
+      - name: Generate Prisma client (backend)
+        run: npx prisma generate
+        working-directory: backend
+      - name: Build backend (dist/main.js required by Playwright)
+        run: npm run build
+        working-directory: backend
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build (production)
+        run: npm run build
+      - name: Install Playwright browsers (Chromium)
+        run: npx playwright install --with-deps chromium
+      - name: E2E tests (Playwright + axe-core)
+        run: npx playwright test --project=chromium
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/**
+            frontend/test-results/**
+          if-no-files-found: ignore
+          retention-days: 7

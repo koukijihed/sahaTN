@@ -1,0 +1,1202 @@
+// SahaTN - Prisma schema.
+// Jour 2 : module Identite (User, Role, UserRole, Session).
+// Jour 3 : profils professionnels, referentiel de specialites et verification
+//          medicale (DoctorProfile, Specialty, DoctorVerificationRequest,
+//          ProfessionalCredential, historique de verification).
+// Jour 4 : etablissements de sante, gestionnaires, affiliations et verification
+//          des etablissements (HealthcareFacility, FacilityManager,
+//          DoctorFacilityAffiliation, FacilityVerificationRequest).
+// Jour 6 : moteur de rendez-vous (AppointmentSchedule, AppointmentSlot,
+//          Appointment, AppointmentEvent). Seuls les creneaux explicitement
+//          configures sont proposables : aucune disponibilite n'est inventee.
+// Jour 7 : fiabilite, audit et notifications des rendez-vous. Politique de
+//          confirmation hybride (AppointmentConfirmationMode), journal
+//          append-only de configuration des agendas
+//          (AppointmentScheduleEvent) et file d'envoi decouplee
+//          (NotificationOutbox).
+// Jour 8 : fondations du dossier medical electronique (MedicalRecord,
+//          ClinicalEncounter, ClinicalObservation, ClinicalDiagnosis,
+//          PatientAllergy, MedicalRecordAccessEvent).
+// Les autres domaines (audit transversal, consentement, ...) seront
+// ajoutes progressivement.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  DOCTOR
+  FACILITY_STAFF
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING_VERIFICATION
+  SUSPENDED
+  DISABLED
+}
+
+// Statut de verification porte par le profil professionnel (vue publique).
+enum DoctorVerificationStatus {
+  UNVERIFIED
+  PENDING
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  NEEDS_CORRECTION
+  SUSPENDED
+  REVOKED
+}
+
+// Statut de traitement d'une demande de verification.
+enum VerificationRequestStatus {
+  DRAFT
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  NEEDS_CORRECTION
+}
+
+// Actions journalisees dans l'historique append-only de verification.
+enum VerificationAction {
+  CREATED
+  SUBMITTED
+  REVIEW_STARTED
+  CORRECTION_REQUESTED
+  RESUBMITTED
+  APPROVED
+  REJECTED
+  REVOKED
+}
+
+enum CredentialType {
+  DIPLOMA
+  MEDICAL_LICENSE
+  SPECIALTY_CERTIFICATE
+  OTHER
+}
+
+enum CredentialVerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  REJECTED
+}
+
+// Secteur de l'etablissement de sante.
+enum FacilitySector {
+  PUBLIC
+  PRIVATE
+}
+
+enum FacilityType {
+  HOSPITAL
+  UNIVERSITY_HOSPITAL
+  REGIONAL_HOSPITAL
+  LOCAL_HOSPITAL
+  BASIC_HEALTH_CENTER
+  PRIVATE_CLINIC
+  MEDICAL_CABINET
+  MEDICAL_GROUP
+  IMAGING_CENTER
+  ANALYSIS_LABORATORY
+  SPECIALIZED_CARE_CENTER
+  OTHER
+}
+
+enum Governorate {
+  TUNIS
+  ARIANA
+  BEN_AROUS
+  MANOUBA
+  NABEUL
+  ZAGHOUAN
+  BIZERTE
+  BEJA
+  JENDOUBA
+  KEF
+  SILIANA
+  SOUSSE
+  MONASTIR
+  MAHDIA
+  SFAX
+  KAIROUAN
+  KASSERINE
+  SIDI_BOUZID
+  GABES
+  MEDENINE
+  TATAOUINE
+  GAFSA
+  TOZEUR
+  KEBILI
+}
+
+// Statut de verification porte par l'etablissement (vue publique).
+enum FacilityVerificationStatus {
+  DRAFT
+  PENDING
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  NEEDS_CORRECTION
+  SUSPENDED
+}
+
+// Actions journalisees dans l'historique append-only de verification des
+// etablissements.
+enum FacilityVerificationAction {
+  CREATED
+  SUBMITTED
+  REVIEW_STARTED
+  CORRECTION_REQUESTED
+  RESUBMITTED
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum FacilityAffiliationStatus {
+  REQUESTED
+  VERIFIED
+  REJECTED
+  ENDED
+}
+
+// Jour 6 : etats d'un agenda de rendez-vous rattache a une affiliation.
+enum AppointmentScheduleStatus {
+  ACTIVE
+  DISABLED
+}
+
+// Un créneau est resserve (BOOKED) pendant toute la vie d'un rendez-vous
+// actif (PENDING ou CONFIRMED) ; il redevient OPEN a l'annulation, et reste
+// BOOKED apres COMPLETED / NO_SHOW (creneau consomme).
+enum AppointmentSlotStatus {
+  OPEN
+  BOOKED
+}
+
+enum AppointmentStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+// Actions journalisees dans l'historique append-only d'un rendez-vous.
+enum AppointmentEventAction {
+  CREATED
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  COMPLETED
+  NO_SHOW_MARKED
+}
+
+// Jour 7 : politique de confirmation d'un agenda. AUTOMATIC confirme
+// immediatement toute reservation ; MANUAL exige une decision du praticien ;
+// DISABLED refuse la reservation en ligne (le creneau reste consultable).
+enum AppointmentConfirmationMode {
+  AUTOMATIC
+  MANUAL
+  DISABLED
+}
+
+// Jour 7 : actions journalisees dans l'historique append-only de configuration
+// d'un agenda.
+enum AppointmentScheduleEventAction {
+  CREATED
+  UPDATED
+}
+
+// Jour 7 : types de notification emis par le domaine des rendez-vous.
+// Jour 9 : EMERGENCY_ACCESS_GRANTED alerte le patient qu'un acces d'urgence
+// (break-glass) a ete ouvert sur son dossier (lecture seule, duree limitee).
+enum NotificationType {
+  APPOINTMENT_CREATED
+  APPOINTMENT_CONFIRMED
+  APPOINTMENT_REJECTED
+  APPOINTMENT_CANCELLED
+  APPOINTMENT_COMPLETED
+  APPOINTMENT_NO_SHOW
+  APPOINTMENT_REMINDER
+  EMERGENCY_ACCESS_GRANTED
+}
+
+enum NotificationChannel {
+  EMAIL
+}
+
+// Etat de traitement d'une entree de la file d'envoi. SKIPPED distingue un
+// envoi volontairement non transmis (adaptateur inactif) d'un echec FAILED :
+// le systeme ne pretend jamais qu'un message a ete envoye sans preuve.
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// Jour 8 : dossier medical electronique (DME). Fondations : dossier
+// longitudinal, consultations, observations structurees, diagnostics,
+// allergies et journal d'acces. Aucune donnee reelle ; aucun contenu clinique
+// dans les journaux techniques.
+enum MedicalRecordStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// Statut d'une entree clinique. ENTERED_IN_ERROR retire une donnee erronee
+// sans la supprimer (tracabilite conservee ; pas de suppression silencieuse).
+enum ClinicalEntryStatus {
+  ACTIVE
+  ENTERED_IN_ERROR
+}
+
+// Distingue une information connue (KNOWN) d'une information non determinee
+// (UNKNOWN) et d'une reponse negative explicite (NEGATED) — par exemple
+// « aucune allergie connue » n'est PAS la meme chose que « non renseigne ».
+enum ClinicalDataCertainty {
+  KNOWN
+  UNKNOWN
+  NEGATED
+}
+
+enum ClinicalEncounterType {
+  CONSULTATION
+  FOLLOW_UP
+  TELECONSULTATION
+  EMERGENCY
+  OTHER
+}
+
+enum ClinicalObservationCategory {
+  VITAL_SIGN
+  LABORATORY
+  SYMPTOM
+  MEASUREMENT
+  EXAM_RESULT
+  OTHER
+}
+
+enum ClinicalDiagnosisStatus {
+  PROVISIONAL
+  CONFIRMED
+  REFUTED
+  RESOLVED
+}
+
+enum AllergySeverity {
+  MILD
+  MODERATE
+  SEVERE
+  LIFE_THREATENING
+  UNKNOWN
+}
+
+enum AllergySource {
+  PATIENT_REPORTED
+  PROFESSIONAL_DOCUMENTED
+  IMPORTED
+  UNKNOWN
+}
+
+enum AllergyStatus {
+  ACTIVE
+  RESOLVED
+}
+
+// Action journalisee lors d'un acces ou d'une modification du dossier.
+// Volontairement grossiere : aucune valeur clinique n'y figure. Jour 9 ajoute la
+// vie des autorisations (octroi, revocation, urgence) et le refus d'acces : un
+// refus est un evenement de securite au meme titre qu'un acces reussi.
+enum MedicalRecordAccessAction {
+  RECORD_CREATED
+  RECORD_VIEWED
+  ENCOUNTER_CREATED
+  OBSERVATION_CREATED
+  DIAGNOSIS_CREATED
+  ALLERGY_CREATED
+  ENCOUNTER_UPDATED
+  OBSERVATION_UPDATED
+  DIAGNOSIS_UPDATED
+  ALLERGY_UPDATED
+  ACCESS_DENIED
+  GRANT_CREATED
+  GRANT_REVOKED
+  GRANT_EXPIRED
+  EMERGENCY_ACCESS_GRANTED
+  EMERGENCY_ACCESS_EXPIRED
+  RELATION_ENDED
+  DOCUMENT_UPLOADED
+  DOCUMENT_VIEWED
+  DOCUMENT_DOWNLOADED
+  DOCUMENT_ARCHIVED
+  DOCUMENT_REJECTED
+}
+
+// Base d'acces (motif). Un enum, et non du texte libre, pour ne jamais risquer
+// d'y consigner de contenu clinique. Jour 9 : EXPLICIT_GRANT (autorisation
+// accordee par le patient) et EMERGENCY (acces d'urgence justifie).
+enum MedicalRecordAccessPurpose {
+  PATIENT_SELF
+  CARE_RELATION
+  AUTHOR
+  SYSTEM
+  EXPLICIT_GRANT
+  EMERGENCY
+}
+
+// ---------------------------------------------------------------- Jour 9
+// Autorisations d'acces, consentement et acces d'urgence. Le simple role
+// DOCTOR, l'affiliation a un etablissement ou la presence d'un rendez-vous ne
+// donnent jamais acces a l'ensemble du dossier : il faut une autorisation
+// explicite du patient (MedicalRecordGrant) ou un acces d'urgence encadre.
+
+// Etat d'une relation de soins. Une relation ENDED est conservee (tracabilite),
+// elle n'autorise plus rien par elle-meme.
+enum CareRelationshipStatus {
+  ACTIVE
+  ENDED
+}
+
+// Origine d'une relation de soins. APPOINTMENT : etablie par un rendez-vous
+// confirme/cloture ; PATIENT_GRANT : le patient a explicitement accorde
+// l'acces ; SYSTEM : cas technique.
+enum CareRelationshipSource {
+  APPOINTMENT
+  PATIENT_GRANT
+  SYSTEM
+}
+
+// Etat d'une autorisation (consentement) accordee par le patient.
+enum RecordGrantStatus {
+  ACTIVE
+  REVOKED
+}
+
+// Portees granulaires accordables. La lecture et l'ecriture sont separees :
+// un patient peut accorder la consultation sans accorder la modification
+// (moindre privilege).
+enum RecordGrantPermission {
+  VIEW_RECORD
+  VIEW_ENCOUNTERS
+  VIEW_OBSERVATIONS
+  VIEW_DIAGNOSES
+  VIEW_ALLERGIES
+  VIEW_DOCUMENTS
+  WRITE_ENCOUNTERS
+  WRITE_OBSERVATIONS
+  WRITE_DIAGNOSES
+  WRITE_ALLERGIES
+  WRITE_DOCUMENTS
+}
+
+// Actions journalisees dans l'historique append-only des autorisations.
+enum RecordGrantEventAction {
+  GRANTED
+  REVOKED
+}
+
+// Etat d'un acces d'urgence (break-glass). EXPIRE est calcule a l'usage
+// (expiration paresseuse) : aucune tache planifiee n'est requise pour l'honorer.
+enum EmergencyAccessStatus {
+  ACTIVE
+  EXPIRED
+}
+
+// ---------------------------------------------------------------- Jour 10
+// Documents medicaux (metadonnees uniquement ; le contenu est stocke hors base
+// dans un espace prive, jamais servi par URL directe). Le depot exige une
+// autorisation d'ecriture sur le dossier ; la consultation et le telechargement
+// exigent une autorisation de lecture (ou un acces d'urgence en lecture seule).
+
+// Categorie du document, volontairement grossiere et sans texte libre.
+enum MedicalDocumentCategory {
+  LAB_RESULT
+  IMAGING
+  REPORT
+  PRESCRIPTION
+  OTHER
+}
+
+// Etat du document. Retrait logique uniquement (jamais de suppression
+// physique) : ARCHIVED retire le document des usages courants tout en
+// conservant la tracabilite et le fichier.
+enum MedicalDocumentStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model User {
+  id                  String     @id @default(uuid()) @db.Uuid
+  email               String?    @unique
+  phone               String?    @unique
+  passwordHash        String?
+  status              UserStatus @default(ACTIVE)
+  failedLoginAttempts Int        @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  roles    UserRole[]
+  sessions Session[]
+
+  doctorProfile                DoctorProfile?
+  reviewedCredentials          ProfessionalCredential[]    @relation("CredentialVerifier")
+  reviewedVerificationRequests DoctorVerificationRequest[] @relation("RequestReviewer")
+  verificationEvents           DoctorVerificationEvent[]   @relation("EventActor")
+
+  ownedFacilities            HealthcareFacility[]          @relation("FacilityOwner")
+  managedFacilities          FacilityManager[]             @relation("FacilityManagerUser")
+  grantedFacilityManagers    FacilityManager[]             @relation("FacilityManagerGranter")
+  requestedAffiliations      DoctorFacilityAffiliation[]   @relation("FacilityAffiliationRequester")
+  decidedAffiliations        DoctorFacilityAffiliation[]   @relation("FacilityAffiliationDecider")
+  endedAffiliations          DoctorFacilityAffiliation[]   @relation("FacilityAffiliationEnder")
+  reviewedFacilityRequests   FacilityVerificationRequest[] @relation("FacilityRequestReviewer")
+  facilityVerificationEvents FacilityVerificationEvent[]   @relation("FacilityEventActor")
+
+  patientAppointments          Appointment[]               @relation("AppointmentPatient")
+  appointmentEvents            AppointmentEvent[]          @relation("AppointmentEventActor")
+  appointmentScheduleEvents    AppointmentScheduleEvent[]  @relation("AppointmentScheduleEventActor")
+  notifications                NotificationOutbox[]        @relation("NotificationRecipient")
+
+  medicalRecord                MedicalRecord?              @relation("MedicalRecordPatient")
+  medicalRecordAccessEvents    MedicalRecordAccessEvent[]  @relation("MedicalRecordAccessActor")
+
+  careRelationsAsPatient       CareRelationship[]          @relation("CareRelationPatient")
+  endedCareRelations           CareRelationship[]          @relation("CareRelationEnder")
+  createdRecordGrants          MedicalRecordGrant[]        @relation("GrantGranter")
+  revokedRecordGrants          MedicalRecordGrant[]        @relation("GrantRevoker")
+  recordGrantEvents            MedicalRecordGrantEvent[]   @relation("GrantEventActor")
+
+  uploadedDocuments            MedicalDocument[]           @relation("DocumentUploaderUser")
+  archivedDocuments            MedicalDocument[]           @relation("DocumentArchiver")
+
+  @@index([status])
+}
+
+model UserRole {
+  userId     String   @db.Uuid
+  role       Role
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@index([role])
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique
+  userAgent  String?
+  ipAddress  String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Profil professionnel (identite professionnelle declaree). Distinct du compte
+// utilisateur et des elements servant a VERIFIER les qualifications.
+model DoctorProfile {
+  id                      String                   @id @default(uuid()) @db.Uuid
+  userId                  String                   @unique @db.Uuid
+  displayName             String
+  professionalDescription String?                  @db.Text
+  languages               String[]                 @default([])
+  yearsOfExperience       Int?
+  verificationStatus      DoctorVerificationStatus @default(UNVERIFIED)
+  isPubliclyListed        Boolean                  @default(false)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  user                 User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialties          DoctorSpecialty[]
+  credentials          ProfessionalCredential[]
+  verificationRequests DoctorVerificationRequest[]
+  affiliations         DoctorFacilityAffiliation[]
+
+  authoredEncounters   ClinicalEncounter[]         @relation("EncounterAuthor")
+  recordedObservations ClinicalObservation[]       @relation("ObservationRecorder")
+  authoredDiagnoses    ClinicalDiagnosis[]         @relation("DiagnosisAuthor")
+  recordedAllergies    PatientAllergy[]            @relation("AllergyRecorder")
+  medicalRecordAccessEvents MedicalRecordAccessEvent[] @relation("MedicalRecordAccessDoctor")
+
+  careRelations        CareRelationship[]          @relation("CareRelationDoctor")
+  receivedRecordGrants MedicalRecordGrant[]        @relation("GrantGrantee")
+  emergencyAccessGrants EmergencyAccessGrant[]     @relation("EmergencyAccessDoctor")
+
+  uploadedDocuments    MedicalDocument[]           @relation("DocumentUploader")
+
+  @@index([verificationStatus, isPubliclyListed])
+}
+
+// Referentiel maintenable des specialites medicales (gestion administrative).
+model Specialty {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  labelFr   String
+  labelAr   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  doctors DoctorSpecialty[]
+
+  @@index([isActive])
+}
+
+model DoctorSpecialty {
+  doctorProfileId String   @db.Uuid
+  specialtyId     String   @db.Uuid
+  isPrimary       Boolean  @default(false)
+  declaredAt      DateTime @default(now())
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  specialty     Specialty     @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
+
+  @@id([doctorProfileId, specialtyId])
+  @@index([specialtyId])
+}
+
+// Qualifications professionnelles. A ce stade : metadonnees uniquement.
+// Aucun document justificatif n'est stocke (voir docs/security.md).
+model ProfessionalCredential {
+  id                 String                       @id @default(uuid()) @db.Uuid
+  doctorProfileId    String                       @db.Uuid
+  type               CredentialType
+  issuingBody        String
+  reference          String?
+  obtainedAt         DateTime?
+  verificationStatus CredentialVerificationStatus @default(UNVERIFIED)
+  verifiedAt         DateTime?
+  verifiedById       String?                      @db.Uuid
+  verificationResult String?                      @db.Text
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  doctorProfile DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  verifiedBy    User?         @relation("CredentialVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  @@index([doctorProfileId])
+}
+
+// Demande de verification professionnelle. `activeForDoctorId` vaut l'id du
+// profil tant que la demande est active (DRAFT/PENDING/UNDER_REVIEW/
+// NEEDS_CORRECTION) et est remis a NULL une fois terminale : la contrainte
+// d'unicite empeche ainsi plusieurs demandes simultanees pour un meme medecin.
+model DoctorVerificationRequest {
+  id                String                    @id @default(uuid()) @db.Uuid
+  doctorProfileId   String                    @db.Uuid
+  status            VerificationRequestStatus @default(DRAFT)
+  submittedAt       DateTime?
+  decisionAt        DateTime?
+  reviewerId        String?                   @db.Uuid
+  decisionReason    String?                   @db.Text
+  activeForDoctorId String?                   @unique @db.Uuid
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  doctorProfile DoctorProfile                     @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  reviewer      User?                             @relation("RequestReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  checklist     DoctorVerificationChecklistItem[]
+  events        DoctorVerificationEvent[]
+
+  @@index([doctorProfileId])
+  @@index([status])
+}
+
+model DoctorVerificationChecklistItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  requestId  String   @db.Uuid
+  code       String
+  label      String
+  isRequired Boolean  @default(true)
+  isChecked  Boolean  @default(false)
+  note       String?  @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  request DoctorVerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, code])
+}
+
+// Historique append-only des evenements de verification (structure minimale ;
+// un module d'audit transversal sera introduit en Phase 7).
+model DoctorVerificationEvent {
+  id         String                     @id @default(uuid()) @db.Uuid
+  requestId  String                     @db.Uuid
+  actorId    String?                    @db.Uuid
+  action     VerificationAction
+  fromStatus VerificationRequestStatus?
+  toStatus   VerificationRequestStatus?
+  reason     String?                    @db.Text
+  createdAt  DateTime                   @default(now())
+
+  request DoctorVerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor   User?                     @relation("EventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([requestId, createdAt])
+}
+
+// Jour 4 : etablissements de sante publics et prives. Adresse en colonnes
+// plates (structure minimale ; une normalisation pourra etre introduite
+// plus tard). Domaines non developpes : planification, dossier medical.
+model HealthcareFacility {
+  id                 String                    @id @default(uuid()) @db.Uuid
+  ownerUserId        String?                   @db.Uuid
+  displayName        String
+  officialName       String?
+  description        String?                   @db.Text
+  sector             FacilitySector
+  type               FacilityType
+  licenseReference   String?
+  sourceReference    String?
+  addressLine        String
+  city               String
+  governorate        Governorate
+  delegation         String?
+  postalCode         String?
+  phone              String?
+  websiteUrl         String?
+  verificationStatus FacilityVerificationStatus @default(DRAFT)
+  isPubliclyListed   Boolean                   @default(false)
+  lastVerifiedAt     DateTime?
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  owner                User?                       @relation("FacilityOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  managers             FacilityManager[]
+  affiliations         DoctorFacilityAffiliation[]
+  verificationRequests FacilityVerificationRequest[]
+  verificationEvents   FacilityVerificationEvent[]
+  clinicalEncounters   ClinicalEncounter[]         @relation("FacilityEncounters")
+
+  @@index([verificationStatus, isPubliclyListed])
+  @@index([governorate, sector, type])
+}
+
+// Gestionnaire d'un etablissement : droits limites a la ressource (aucun role
+// global). Nomme uniquement par un administrateur.
+model FacilityManager {
+  id         String   @id @default(uuid()) @db.Uuid
+  facilityId String   @db.Uuid
+  userId     String   @db.Uuid
+  grantedBy  String?  @db.Uuid
+  createdAt  DateTime @default(now())
+
+  facility      HealthcareFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  user          User               @relation("FacilityManagerUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser User?              @relation("FacilityManagerGranter", fields: [grantedBy], references: [id], onDelete: SetNull)
+
+  @@unique([facilityId, userId])
+  @@index([userId])
+}
+
+// Affiliation medecin-etablissement. L'unicite (medecin, etablissement, statut)
+// autorise l'historique ; une seule affiliation active (REQUESTED ou VERIFIED)
+// par paire est garantie au niveau service.
+model DoctorFacilityAffiliation {
+  id              String                    @id @default(uuid()) @db.Uuid
+  doctorProfileId String                    @db.Uuid
+  facilityId      String                    @db.Uuid
+  status          FacilityAffiliationStatus @default(REQUESTED)
+  requestedBy     String                    @db.Uuid
+  requestedAt     DateTime                  @default(now())
+  decidedBy       String?                   @db.Uuid
+  decidedAt       DateTime?
+  decisionReason  String?                   @db.Text
+  endedBy         String?                   @db.Uuid
+  endDate         DateTime?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  doctorProfile DoctorProfile      @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  facility      HealthcareFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  requester     User               @relation("FacilityAffiliationRequester", fields: [requestedBy], references: [id], onDelete: Restrict)
+  decider       User?              @relation("FacilityAffiliationDecider", fields: [decidedBy], references: [id], onDelete: SetNull)
+  ender         User?              @relation("FacilityAffiliationEnder", fields: [endedBy], references: [id], onDelete: SetNull)
+
+  appointmentSchedule AppointmentSchedule?
+
+  @@unique([doctorProfileId, facilityId, status])
+  @@index([facilityId, status])
+  @@index([doctorProfileId, status])
+}
+
+// Demande de verification d'un etablissement, meme principe que
+// DoctorVerificationRequest : activeForFacilityId valide tant que la demande
+// est active, remis a NULL une fois terminale (unicite en base).
+model FacilityVerificationRequest {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  facilityId          String                    @db.Uuid
+  status              VerificationRequestStatus @default(DRAFT)
+  submittedAt         DateTime?
+  decisionAt          DateTime?
+  reviewerId          String?                   @db.Uuid
+  decisionReason      String?                   @db.Text
+  activeForFacilityId String?                   @unique @db.Uuid
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  facility HealthcareFacility            @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  reviewer User?                         @relation("FacilityRequestReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  events   FacilityVerificationEvent[]
+
+  @@index([facilityId])
+  @@index([status])
+}
+
+// Historique append-only des evenements de verification d'un etablissement.
+// requestId peut etre null pour les actions sans demande ouverte (ex. SUSPEND).
+model FacilityVerificationEvent {
+  id         String                     @id @default(uuid()) @db.Uuid
+  requestId  String?                    @db.Uuid
+  facilityId String                     @db.Uuid
+  actorId    String?                    @db.Uuid
+  action     FacilityVerificationAction
+  fromStatus FacilityVerificationStatus?
+  toStatus   FacilityVerificationStatus?
+  reason     String?                    @db.Text
+  createdAt  DateTime                   @default(now())
+
+  request  FacilityVerificationRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  facility HealthcareFacility          @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  actor    User?                       @relation("FacilityEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([facilityId, createdAt])
+  @@index([requestId])
+}
+
+// Jour 6 : agenda de rendez-vous rattache a une affiliation
+// medecin-etablissement (une seule agenda actif par affiliation). Les horaires
+// des creneaux sont stockes en UTC ; `timezone` indique le fuseau dans lequel
+// l'equipe les saisit (defaut : Africa/Tunis).
+// Jour 7 : `confirmationMode` remplace le booleen `requiresConfirmation`
+// (AUTOMATIC = ancien false, MANUAL = ancien true, DISABLED = pas de
+// reservation en ligne) ; chaque changement est journalise dans
+// AppointmentScheduleEvent.
+model AppointmentSchedule {
+  id                   String                      @id @default(uuid()) @db.Uuid
+  affiliationId        String                      @unique @db.Uuid
+  timezone             String                      @default("Africa/Tunis")
+  visitDurationMinutes Int                         @default(30)
+  confirmationMode     AppointmentConfirmationMode @default(MANUAL)
+  status               AppointmentScheduleStatus   @default(ACTIVE)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  affiliation DoctorFacilityAffiliation @relation(fields: [affiliationId], references: [id], onDelete: Cascade)
+  slots       AppointmentSlot[]
+  events      AppointmentScheduleEvent[]
+
+  @@index([status])
+}
+
+// Creneau explicitement configure : aucune disponibilite n'est inventee.
+// L'unicite (scheduleId, startsAt) a la generation ; l'unicite partielle
+// « un seul rendez-vous actif par creneau » est portee par la migration
+// add_appointments (index partiel SQL non representable dans le schema).
+model AppointmentSlot {
+  id         String                @id @default(uuid()) @db.Uuid
+  scheduleId String                @db.Uuid
+  startsAt   DateTime
+  endsAt     DateTime
+  status     AppointmentSlotStatus @default(OPEN)
+  createdAt  DateTime              @default(now())
+
+  schedule    AppointmentSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@unique([scheduleId, startsAt])
+  @@index([scheduleId, status])
+}
+
+// Rendez-vous. `requiresConfirmation` est un instantane pris au moment de la
+// reservation (elle ne change pas pour les rendez-vous deja crees si l'agenda
+// est modifie ensuite). `idempotencyKey` (propre au patient) permet a un
+// client de rejouer sans risque une demande de reservation.
+model Appointment {
+  id                   String            @id @default(uuid()) @db.Uuid
+  slotId               String            @db.Uuid
+  patientUserId        String            @db.Uuid
+  reason               String?           @db.Text
+  requiresConfirmation Boolean           @default(true)
+  status               AppointmentStatus @default(PENDING)
+  idempotencyKey       String
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  slot   AppointmentSlot   @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  patient User             @relation("AppointmentPatient", fields: [patientUserId], references: [id], onDelete: Restrict)
+  events  AppointmentEvent[]
+  notifications NotificationOutbox[]
+  clinicalEncounter ClinicalEncounter? @relation("EncounterAppointment")
+
+  @@unique([patientUserId, idempotencyKey])
+  @@index([slotId, status])
+  @@index([patientUserId, status, createdAt])
+}
+
+// Historique append-only des evenements d'un rendez-vous (creation, decision,
+// annulation, cloture). Meme structure que les autres journaux du systeme.
+model AppointmentEvent {
+  id            String                 @id @default(uuid()) @db.Uuid
+  appointmentId String                 @db.Uuid
+  actorId       String?                @db.Uuid
+  action        AppointmentEventAction
+  fromStatus    AppointmentStatus?
+  toStatus      AppointmentStatus?
+  reason        String?                @db.Text
+  createdAt     DateTime               @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  actor       User?       @relation("AppointmentEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([appointmentId, createdAt])
+}
+
+// Jour 7 : historique append-only de configuration d'un agenda (creation,
+// changements de mode de confirmation, duree, statut...). Les modifications de
+// configuration font partie de la tracabilite attendue ; aucune donnee
+// medicale n'y figure.
+model AppointmentScheduleEvent {
+  id         String                           @id @default(uuid()) @db.Uuid
+  scheduleId String                           @db.Uuid
+  actorId    String?                          @db.Uuid
+  action     AppointmentScheduleEventAction
+  changes    Json?
+  createdAt  DateTime                         @default(now())
+
+  schedule AppointmentSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  actor    User?               @relation("AppointmentScheduleEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([scheduleId, createdAt])
+}
+
+// Jour 7 : file d'envoi (outbox) des notifications. Decouplee du domaine des
+// rendez-vous : le service de rendez-vous ne fait que deposer un message, un
+// adaptateur de canal est responsable de l'envoi reel. `dedupeKey` empeche les
+// doublons lors d'un rejeu. Le `payload` ne contient jamais de donnee sensible
+// (jamais le motif du patient). Statut SKIPPED = non transmis (adaptateur
+// inactif) ; le systeme n'affirme jamais un envoi sans preuve.
+model NotificationOutbox {
+  id              String              @id @default(uuid()) @db.Uuid
+  type            NotificationType
+  channel         NotificationChannel @default(EMAIL)
+  recipientUserId String              @db.Uuid
+  appointmentId   String?             @db.Uuid
+  payload         Json
+  status          NotificationStatus  @default(PENDING)
+  attempts        Int                 @default(0)
+  dedupeKey       String              @unique
+  scheduledFor    DateTime?
+  lastAttemptAt   DateTime?
+  sentAt          DateTime?
+  error           String?             @db.Text
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  recipient   User         @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([recipientUserId, createdAt])
+}
+
+// Jour 8 : dossier medical longitudinal. Un dossier par patient (unicite
+// patientUserId). Le dossier est cree a la demande, jamais supprime.
+model MedicalRecord {
+  id            String              @id @default(uuid()) @db.Uuid
+  patientUserId String              @unique @db.Uuid
+  status        MedicalRecordStatus @default(ACTIVE)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  patient      User                      @relation("MedicalRecordPatient", fields: [patientUserId], references: [id], onDelete: Restrict)
+  encounters   ClinicalEncounter[]
+  observations ClinicalObservation[]
+  diagnoses    ClinicalDiagnosis[]
+  allergies    PatientAllergy[]
+  accessEvents MedicalRecordAccessEvent[]
+  grants       MedicalRecordGrant[]
+  emergencyAccessGrants EmergencyAccessGrant[]
+  documents    MedicalDocument[]
+
+  @@index([status])
+}
+
+// Consultation / rencontre medicale. L'auteur est un profil professionnel
+// VERIFIE (controle applicatif). Le lien vers un rendez-vous existant est
+// optionnel ; la rencontre n'est jamais dupliquee d'un rendez-vous.
+model ClinicalEncounter {
+  id              String                @id @default(uuid()) @db.Uuid
+  medicalRecordId String                @db.Uuid
+  doctorProfileId String                @db.Uuid
+  facilityId      String?               @db.Uuid
+  appointmentId   String?               @unique @db.Uuid
+  type            ClinicalEncounterType @default(CONSULTATION)
+  occurredAt      DateTime
+  chiefComplaint  String?               @db.Text
+  notes           String?               @db.Text
+  recordStatus    ClinicalEntryStatus   @default(ACTIVE)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  medicalRecord MedicalRecord       @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  doctorProfile DoctorProfile       @relation("EncounterAuthor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+  facility      HealthcareFacility? @relation("FacilityEncounters", fields: [facilityId], references: [id], onDelete: SetNull)
+  appointment   Appointment?        @relation("EncounterAppointment", fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  observations ClinicalObservation[]
+  diagnoses    ClinicalDiagnosis[]
+  documents    MedicalDocument[]
+
+  @@index([medicalRecordId, occurredAt])
+  @@index([doctorProfileId])
+}
+
+// Observation structuree (constante, symptome, mesure, resultat...). La
+// certitude distingue « mesure connue », « non determinee » et « negatif
+// explicite ». Auteur = profil professionnel verifie.
+model ClinicalObservation {
+  id              String                      @id @default(uuid()) @db.Uuid
+  medicalRecordId String                      @db.Uuid
+  encounterId     String?                     @db.Uuid
+  doctorProfileId String                      @db.Uuid
+  category        ClinicalObservationCategory
+  code            String?
+  label           String
+  valueText       String?                     @db.Text
+  valueNumeric    Float?
+  unit            String?
+  certainty       ClinicalDataCertainty       @default(KNOWN)
+  observedAt      DateTime
+  recordStatus    ClinicalEntryStatus         @default(ACTIVE)
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+
+  medicalRecord MedicalRecord     @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  encounter     ClinicalEncounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  doctorProfile DoctorProfile     @relation("ObservationRecorder", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+
+  @@index([medicalRecordId, observedAt])
+  @@index([encounterId])
+}
+
+// Diagnostic documente. Auteur = profil professionnel verifie ; le patient ne
+// peut jamais forger l'auteur d'un diagnostic.
+model ClinicalDiagnosis {
+  id              String                  @id @default(uuid()) @db.Uuid
+  medicalRecordId String                  @db.Uuid
+  encounterId     String?                 @db.Uuid
+  doctorProfileId String                  @db.Uuid
+  code            String?
+  label           String
+  description     String?                 @db.Text
+  status          ClinicalDiagnosisStatus @default(PROVISIONAL)
+  diagnosedAt     DateTime
+  recordStatus    ClinicalEntryStatus     @default(ACTIVE)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  medicalRecord MedicalRecord     @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  encounter     ClinicalEncounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  doctorProfile DoctorProfile     @relation("DiagnosisAuthor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+
+  @@index([medicalRecordId, diagnosedAt])
+  @@index([encounterId])
+}
+
+// Allergie declaree ou documentee. `source` indique l'origine, `certainty`
+// distingue une allergie confirmee d'une negation explicite ou d'une
+// information non determinee.
+model PatientAllergy {
+  id              String                @id @default(uuid()) @db.Uuid
+  medicalRecordId String                @db.Uuid
+  doctorProfileId String                @db.Uuid
+  allergen        String
+  reaction        String?               @db.Text
+  severity        AllergySeverity?
+  source          AllergySource         @default(UNKNOWN)
+  certainty       ClinicalDataCertainty @default(KNOWN)
+  status          AllergyStatus         @default(ACTIVE)
+  recordStatus    ClinicalEntryStatus   @default(ACTIVE)
+  recordedAt      DateTime
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  medicalRecord MedicalRecord @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  doctorProfile DoctorProfile @relation("AllergyRecorder", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+
+  @@index([medicalRecordId, recordedAt])
+}
+
+// Journal d'acces au dossier (append-only en base). Ne contient que des
+// references et des enums : jamais de contenu clinique, jamais de texte libre.
+model MedicalRecordAccessEvent {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  medicalRecordId     String                    @db.Uuid
+  actorUserId         String?                   @db.Uuid
+  actorDoctorProfileId String?                  @db.Uuid
+  action              MedicalRecordAccessAction
+  purpose             MedicalRecordAccessPurpose
+  targetType          String?
+  targetId            String?                   @db.Uuid
+  // Jour 9 : code de motif borné (jamais de contenu clinique ni de texte
+  // libre). Principalement utilise pour les refus et les expirations.
+  reason              String?
+  createdAt           DateTime                  @default(now())
+
+  medicalRecord      MedicalRecord  @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  actorUser          User?          @relation("MedicalRecordAccessActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorDoctorProfile DoctorProfile? @relation("MedicalRecordAccessDoctor", fields: [actorDoctorProfileId], references: [id], onDelete: SetNull)
+
+  @@index([medicalRecordId, createdAt])
+}
+
+// Jour 9 : relation de soins explicite et durable entre un praticien et un
+// patient. Elle ne suffit jamais, a elle seule, a autoriser l'acces clinique :
+// elle materialise le lien (rendez-vous ou consentement) pour la tracabilite et
+// la gestion par le patient. Une seule relation ACTIVE par paire (index partiel
+// SQL cote migration).
+model CareRelationship {
+  id              String                 @id @default(uuid()) @db.Uuid
+  patientUserId   String                 @db.Uuid
+  doctorProfileId String                 @db.Uuid
+  status          CareRelationshipStatus @default(ACTIVE)
+  source          CareRelationshipSource
+  establishedAt   DateTime               @default(now())
+  endedAt         DateTime?
+  endedByUserId   String?                @db.Uuid
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  patient User         @relation("CareRelationPatient", fields: [patientUserId], references: [id], onDelete: Restrict)
+  doctor  DoctorProfile @relation("CareRelationDoctor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+  endedBy User?        @relation("CareRelationEnder", fields: [endedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([doctorProfileId, status])
+  @@index([patientUserId, status])
+}
+
+// Jour 9 : autorisation (consentement) explicite accordee par le patient a un
+// professionnel precis. Portee granulaire (permissions), duree optionnelle
+// (expiresAt). Révocation immédiate. Une seule autorisation ACTIVE par
+// (dossier, professionnel) : index partiel SQL cote migration.
+model MedicalRecordGrant {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  medicalRecordId        String                  @db.Uuid
+  granteeDoctorProfileId String                  @db.Uuid
+  permissions            RecordGrantPermission[] @default([])
+  status                 RecordGrantStatus       @default(ACTIVE)
+  effectiveAt            DateTime                @default(now())
+  expiresAt              DateTime?
+  reason                 String?                 @db.Text
+  grantedByUserId        String?                 @db.Uuid
+  revokedByUserId        String?                 @db.Uuid
+  revokedAt              DateTime?
+  revokedReason          String?                 @db.Text
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  medicalRecord MedicalRecord        @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  grantee       DoctorProfile        @relation("GrantGrantee", fields: [granteeDoctorProfileId], references: [id], onDelete: Restrict)
+  grantedBy     User?                @relation("GrantGranter", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  revokedBy     User?                @relation("GrantRevoker", fields: [revokedByUserId], references: [id], onDelete: SetNull)
+  events        MedicalRecordGrantEvent[]
+
+  @@index([medicalRecordId, status])
+  @@index([granteeDoctorProfileId, status])
+}
+
+// Jour 9 : historique append-only des autorisations (octroi, revocation). Une
+// ligne ne peut jamais etre modifiee ni supprimee (declencheur base).
+model MedicalRecordGrantEvent {
+  id          String                 @id @default(uuid()) @db.Uuid
+  grantId     String                 @db.Uuid
+  action      RecordGrantEventAction
+  actorUserId String?                @db.Uuid
+  reason      String?                @db.Text
+  createdAt   DateTime               @default(now())
+
+  grant MedicalRecordGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  actor User?              @relation("GrantEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([grantId, createdAt])
+}
+
+// Jour 9 : acces d'urgence (break-glass). Lecture seule, duree strictement
+// limitee, justification obligatoire, trace et notifie au patient. Une seule
+// urgence ACTIVE par (dossier, professionnel) : index partiel SQL cote migration.
+model EmergencyAccessGrant {
+  id              String                @id @default(uuid()) @db.Uuid
+  medicalRecordId String                @db.Uuid
+  doctorProfileId String                @db.Uuid
+  justification   String                @db.Text
+  status          EmergencyAccessStatus @default(ACTIVE)
+  grantedAt       DateTime              @default(now())
+  expiresAt       DateTime
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  medicalRecord MedicalRecord @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  doctor        DoctorProfile @relation("EmergencyAccessDoctor", fields: [doctorProfileId], references: [id], onDelete: Restrict)
+
+  @@index([medicalRecordId, status])
+  @@index([doctorProfileId, status])
+}
+
+// Jour 10 : document medical (metadonnees seulement). Le CONTENU binaire n'est
+// jamais stocke dans cette table : il vit hors base, dans un espace de stockage
+// prive, sous une cle generee par le serveur (jamais derivee du nom de fichier
+// fourni par l'utilisateur). Le type MIME est a la fois declare (client) et
+// verifie (contenu) ; une empreinte SHA-256 garantit l'integrite. Le retrait est
+// logique (status ARCHIVED), jamais physique.
+model MedicalDocument {
+  id                 String                @id @default(uuid()) @db.Uuid
+  medicalRecordId    String                @db.Uuid
+  encounterId        String?               @db.Uuid
+  category           MedicalDocumentCategory
+  originalName       String
+  storageKey         String                @unique
+  declaredMimeType   String
+  detectedMimeType   String
+  sizeBytes          Int
+  checksumSha256     String
+  status             MedicalDocumentStatus @default(ACTIVE)
+  uploadedByUserId   String                @db.Uuid
+  uploaderDoctorProfileId String?          @db.Uuid
+  archivedAt         DateTime?
+  archivedByUserId   String?               @db.Uuid
+  archiveReason      String?               @db.Text
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  medicalRecord MedicalRecord     @relation(fields: [medicalRecordId], references: [id], onDelete: Cascade)
+  encounter     ClinicalEncounter? @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  uploadedBy    User              @relation("DocumentUploaderUser", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  uploader      DoctorProfile?    @relation("DocumentUploader", fields: [uploaderDoctorProfileId], references: [id], onDelete: Restrict)
+  archivedBy    User?             @relation("DocumentArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([medicalRecordId, status, createdAt])
+  @@index([encounterId])
+}
