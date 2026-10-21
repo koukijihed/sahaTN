@@ -235,6 +235,34 @@ code {
   outline: none;
 }
 
+/* Bandeau de démonstration (données fictives). Contraste élevé, non masquable,
+   affiché en haut de toutes les pages pour éviter toute confusion avec un
+   service de santé réel. */
+.demo-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: baseline;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  background: var(--warning-50);
+  border-bottom: 1px solid var(--warning-700);
+  color: var(--warning-700);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.demo-banner strong {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+.demo-banner a {
+  color: inherit;
+  text-decoration: underline;
+}
+
 .eyebrow {
   display: inline-block;
   font-size: 0.75rem;

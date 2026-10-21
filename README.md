@@ -13,8 +13,8 @@ professionnels vérifiés, comptes rendus médicaux et historique médical longi
 > médical longitudinal et consentement (Jours 9-10), export FHIR R4 (Jour 11),
 > documents médicaux (Jour 12), couche UX (Jours 13-14), fiabilité de la
 > configuration (Jour 15) et **CI GitHub Actions** (Jour 16) sont livrés.
-> **Couverture de tests : 201 tests unitaires backend, 117 tests e2e backend,
-> 42 tests navigateur (Playwright + axe-core).** Plusieurs fonctions restent
+> **Couverture de tests : 204 tests unitaires backend, 121 tests e2e backend,
+> 43 tests navigateur (Playwright + axe-core).** Plusieurs fonctions restent
 > volontairement hors périmètre (MFA, envoi réel d'e-mails/SMS, prescriptions,
 > sauvegardes, déploiement automatisé) : voir [`docs/roadmap.md`](docs/roadmap.md)
 > et [`docs/ci.md`](docs/ci.md).
@@ -188,10 +188,13 @@ docker compose up --build
 pwsh ./deploy.ps1  # lance backend + frontend + Postgres embarqué (port 55435)
 ```
 
-**Déploiement cloud (fictif)** : `render.yaml` (Render Blueprint) et `vercel.json`
-sont fournis ; adapter `repo:` dans `render.yaml` et `API_URL` dans `vercel.json`
-avant de connecter GitHub. Pour une base managée (Neon/Supabase/Railway), voir
-[`docs/neon.md`](docs/neon.md) (définir `DATABASE_URL` avec `?sslmode=require`).
+**Déploiement cloud (démonstration, données synthétiques uniquement)** : voir le
+runbook [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) (Neon → Render → Vercel).
+`render.yaml` (Blueprint Render, backend uniquement) est fourni et exécute les
+migrations **et** le seed de démonstration au build ; le frontend est détecté
+automatiquement par Vercel (racine de projet `frontend/`). Pour une base managée
+(Neon/Supabase/Railway), voir [`docs/neon.md`](docs/neon.md) (définir
+`DATABASE_URL` avec `?sslmode=require`).
 
 - Frontend : http://localhost:3000
 - API : http://localhost:4000/api

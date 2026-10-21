@@ -7,8 +7,8 @@ export function SiteFooter() {
         <div>
           <p className="site-footer__title">SahaTN</p>
           <p className="site-footer__note">
-            Plateforme nationale de santé. Environnement de développement :
-            aucune donnée médicale réelle n&apos;est utilisée.
+            Prototype de démonstration : toutes les données sont fictives
+            (aucune donnée médicale réelle). Ne pas utiliser pour des soins.
           </p>
         </div>
         <nav aria-label="Liens de pied de page">
@@ -21,6 +21,9 @@ export function SiteFooter() {
           </p>
           <p>
             <Link href="/facilities">Annuaire des établissements</Link>
+          </p>
+          <p>
+            <Link href="/demo">À propos de la démo</Link>
           </p>
         </nav>
         <div>

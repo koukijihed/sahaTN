@@ -67,7 +67,7 @@ test.describe('Parcours professionnel (médecin)', () => {
     ).toBeVisible();
   });
 
-  test('4. aucun dossier patient autorisé par défaut', async ({ page }) => {
+  test('4. seuls les dossiers consentis sont autorisés', async ({ page }) => {
     await loginViaUi(page, DEMO_DOCTOR_EMAIL, DEMO_PASSWORD);
     const nav = await sidebar(page);
     await nav.getByRole('link', { name: /Dossiers autorisés/ }).click();
@@ -75,9 +75,20 @@ test.describe('Parcours professionnel (médecin)', () => {
     await expect(
       page.getByRole('heading', { level: 1, name: 'Dossiers autorisés' })
     ).toBeVisible();
+
+    // Le seed accorde un consentement explicite au patient de démonstration
+    // principal : un dossier doit apparaître, sans accès d’urgence, avec la
+    // possibilité de l’ouvrir. Le second patient (sans consentement) n’y figure
+    // jamais.
+    await expect(
+      page.getByRole('link', { name: 'Ouvrir le dossier' })
+    ).toHaveCount(1);
+    await expect(
+      page.getByText('Accès d’urgence', { exact: true })
+    ).toHaveCount(0);
     await expect(
       page.getByText('Aucun dossier autorisé', { exact: true })
-    ).toBeVisible();
+    ).toHaveCount(0);
   });
 
   test('5. dialogue de confirmation : ouverture, annulation (Échap), confirmation', async ({

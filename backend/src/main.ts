@@ -1,37 +1,16 @@
-import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import cookieParser from 'cookie-parser';
-import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { configureAppFromEnv } from './bootstrap/configure-app';
 import { resolveApiDocsEnabled } from './config/env.validation';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  app.use(helmet());
-  app.use(cookieParser());
+  configureAppFromEnv(app);
 
   const apiPrefix = process.env.API_PREFIX ?? 'api';
-  app.setGlobalPrefix(apiPrefix);
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true
-    })
-  );
-
-  app.useGlobalFilters(new HttpExceptionFilter());
-
-  const corsOrigin = (process.env.CORS_ORIGIN ?? 'http://localhost:3000')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-  app.enableCors({ origin: corsOrigin, credentials: true });
 
   // Documentation OpenAPI : disponible hors production, desactivee en
   // production sauf activation explicite (ENABLE_API_DOCS=true). Cela evite

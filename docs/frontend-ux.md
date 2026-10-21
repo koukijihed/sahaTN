@@ -101,7 +101,7 @@ Les vérifications visuelles automatiquement outillées sont désormais en place
   `API_URL=http://localhost:4000`), un seul worker, aucune reprise.
 - **Configuration** : `npm run test:e2e` (`playwright test`),
   `npm run test:e2e:report` (`playwright show-report`).
-- **Couverture** (42 tests, `frontend/tests/e2e/`) :
+- **Couverture** (43 tests, `frontend/tests/e2e/`) :
   - `public.spec.ts` — parcours public, recherche, états vides/erreur, fiche établissement.
   - `auth.spec.ts` — inscription/connexion, message générique d'échec, mot de passe faible,
     déconnexion, session révoquée côté serveur, `401` sur API protégée.

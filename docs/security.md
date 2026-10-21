@@ -205,13 +205,20 @@ curieux), compte compromis, logiciel malveillant, erreur humaine.
 - [x] Validation stricte testée (rejet des entrées invalides et des champs non attendus ;
   rôle privilégié auto-attribué rejeté).
 - [x] Anti-force brute / limitation testée (verrouillage de compte après échecs répétés).
-- [ ] En-têtes de sécurité vérifiés par test (Helmet est activé, sans test dédié).
+- [x] En-têtes de sécurité vérifiés par test : Helmet + **CSP explicite** testés via la
+  pile de middlewares réelle (`configureApp` partagé avec `main.ts`), ainsi qu'au niveau
+  du frontend Next.js (`backend/test/security-headers.e2e-spec.ts`,
+  `frontend/tests/e2e/security.spec.ts`).
 - [ ] Absence de données sensibles dans les logs vérifiée (à faire).
 - [ ] Restauration de sauvegarde exercée (à faire).
 
 > Tant que ces points ne sont pas couverts par des tests, aucune fonctionnalité ne doit
 > être présentée comme « sécurisée ». Les cases cochées renvoient à des tests exécutés
 > (voir `backend/test/auth.e2e-spec.ts` et les `*.spec.ts`).
+
+> **Mise à jour (post-audit)** : le filtre d'exception global n'écho plus la *query
+> string* (chemin seul) dans les réponses **ni** dans les logs ; un test unitaire
+> (`HttpExceptionFilter`) garantit qu'aucune valeur d'URL sensible n'est reflétée.
 
 ## 13bis. Journal des protections actives (Jour 2)
 

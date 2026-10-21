@@ -31,6 +31,7 @@ Chaque décision suit cette structure :
 | 0012 | [Accès explicite aux dossiers médicaux, consentement et accès d'urgence](0012-acces-consentement-urgence.md) | Accepté |
 | 0013 | [Stockage privé et accès contrôlé des documents médicaux](0013-stockage-documents-medicaux.md) | Accepté |
 | 0014 | [Prototype d'export FHIR R4 en lecture seule](0014-prototype-fhir-r4.md) | Accepté |
+| 0015 | [Posture de sécurité du prototype public de démonstration](0015-posture-securite-prototype-demo.md) | Accepté |
 
 ## Ajouter une décision
 

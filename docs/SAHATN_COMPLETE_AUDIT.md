@@ -9,6 +9,13 @@
 > **Statut** : audit réalisé le 2026-10-21. Toutes les constatations marquées
 > « vérifié » ont été reproduites localement (commandes fournies en annexe A).
 > Aucune donnée réelle n'est utilisée nulle part (ADR-0007).
+>
+> **Mise à jour post-audit (2026-10-21)** : une remédiation ciblée a durci les
+> **en-têtes de sécurité** (SEC-5/SEC-6), ajouté le **bandeau de démonstration**
+> (STEP 3) et complété le **seed de démonstration idempotent** (STEP 4). Les
+> compteurs de tests ci-dessous ont évolué : **204 unitaires, 121 e2e, 43
+> Playwright**. Voir [`SAHATN_DEPLOYMENT_READINESS.md`](SAHATN_DEPLOYMENT_READINESS.md)
+> et [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ---
 
@@ -28,10 +35,10 @@ FHIR en lecture seule validé contre le schéma officiel HL7 R4.
 | Domaine | Résultat |
 | --- | --- |
 | Backend `lint` / `typecheck` | ✅ 0 erreur |
-| Backend `test` (unitaires) | ✅ **201 / 201** (16 suites) |
-| Backend `test:e2e` | ✅ **117 / 117** (10 suites, PostgreSQL 16 éphémère) |
+| Backend `test` (unitaires) | ✅ **201 / 201** (16 suites) — *post-audit : 204 / 17* |
+| Backend `test:e2e` | ✅ **117 / 117** (10 suites, PostgreSQL 16 éphémère) — *post-audit : 121 / 11* |
 | Frontend `lint` / `typecheck` | ✅ 0 erreur |
-| Frontend Playwright (E2E navigateur) | ✅ **42 / 42** (Chromium) |
+| Frontend Playwright (E2E navigateur) | ✅ **42 / 42** (Chromium) — *post-audit : 43* |
 
 **Les 10 écarts les plus importants** (détail §6) :
 
@@ -168,7 +175,7 @@ FHIR en lecture seule validé contre le schéma officiel HL7 R4.
 ## 5. Qualité, tests & CI (vérifié)
 
 - **Couverture fonctionnelle** : 201 tests unitaires + 117 tests e2e backend +
-  42 tests Playwright frontend. Les e2e backend couvrent auth, docteurs,
+  42 tests Playwright frontend (post-audit : 204 / 121 / 43). Les e2e backend couvrent auth, docteurs,
   facilities, search, appointments, medical-records, medical-documents, fhir,
   terminology, health.
 - **Tests négatifs présents** : refus d'accès hors contexte, révocation
@@ -367,14 +374,14 @@ $env:PATH = "C:\Program Files\nodejs;$env:Path"
 cd backend
 npm.cmd run lint        # 0 erreur
 npm.cmd run typecheck   # 0 erreur
-npm.cmd test            # 16 suites, 201 passed
-npm.cmd run test:e2e    # 10 suites, 117 passed (PostgreSQL 16 ephemere)
+npm.cmd test            # 16 suites, 201 passed (post-audit : 17 suites, 204)
+npm.cmd run test:e2e    # 10 suites, 117 passed (post-audit : 11 suites, 121)
 
 # Frontend
 cd ../frontend
 npm.cmd run lint        # 0 avertissement
 npm.cmd run typecheck   # 0 erreur
-npm.cmd run test:e2e    # 42 passed (Chromium)
+npm.cmd run test:e2e    # 42 passed (Chromium) (post-audit : 43)
 ```
 
 ## Annexe B — Fichiers inspectés (sélection)

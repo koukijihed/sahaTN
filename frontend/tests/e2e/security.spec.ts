@@ -18,6 +18,31 @@ const PROTECTED_GET_ENDPOINTS = [
 ];
 
 test.describe('Sécurité et cloisonnement des rôles', () => {
+  test('0. le frontend pose les en-têtes de sécurité et une CSP stricte', async ({
+    request
+  }) => {
+    const response = await request.get('/');
+    expect(response.status()).toBe(200);
+
+    const headers = response.headers();
+    expect(headers['x-content-type-options']).toBe('nosniff');
+    expect(headers['x-frame-options']).toBe('DENY');
+    expect(headers['referrer-policy']).toBe(
+      'strict-origin-when-cross-origin'
+    );
+    expect(headers['x-powered-by']).toBeUndefined();
+
+    const csp = headers['content-security-policy'];
+    expect(csp).toBeDefined();
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("object-src 'none'");
+    // Next.js (App Router) injecte des scripts inline de bootstrap ; sans
+    // pipeline de nonces, `'unsafe-inline'` est requis, mais `eval` reste
+    // interdit.
+    expect(csp).not.toContain("'unsafe-eval'");
+  });
+
   test('1. sans session, les ressources protégées répondent 401', async ({
     request
   }) => {
@@ -53,12 +78,21 @@ test.describe('Sécurité et cloisonnement des rôles', () => {
   test('3. un médecin n’accède qu’aux dossiers consentis', async ({ page }) => {
     await loginViaUi(page, DEMO_DOCTOR_EMAIL, DEMO_PASSWORD);
 
-    // Aucun consentement n’est créé par le seed : la liste doit être vide.
+    // Le seed accorde un consentement explicite à ce praticien pour le patient
+    // de démonstration principal : la liste doit contenir exactement une entrée
+    // (jamais le second patient, qui n’a rien consenti).
     const list = await page.context().request.get(
       '/api/medical-records/patients'
     );
     expect(list.ok()).toBeTruthy();
-    expect((await list.json()) as unknown[]).toEqual([]);
+    const patients = (await list.json()) as {
+      patientUserId: string;
+      permissions: string[];
+      hasEmergencyAccess: boolean;
+    }[];
+    expect(patients).toHaveLength(1);
+    expect(patients[0].permissions.length).toBeGreaterThan(0);
+    expect(patients[0].hasEmergencyAccess).toBe(false);
 
     // Un dossier arbitraire est refusé.
     const foreign = await page.context().request.get(

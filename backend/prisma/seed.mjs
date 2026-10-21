@@ -1,14 +1,144 @@
 // SahaTN - Données de démonstration.
 // ATTENTION : toutes ces données sont FICTIVES (ADR-0007). Elles permettent de
-// développer en local sans aucune donnée réelle. Les référentiels devront
-// provenir de sources institutionnelles vérifiées et être gérés par une
-// procédure administrative contrôlée (voir docs/security.md).
+// développer et de faire la démonstration sans aucune donnée réelle. Les
+// référentiels devront provenir de sources institutionnelles vérifiées et être
+// gérés par une procédure administrative contrôlée (voir docs/security.md).
+//
+// Le seed est IDEMPOTENT : le rejouer ne crée pas de doublons. Il est aussi
+// DÉTERMINISTE pour tout ce qui touche aux identifiants de démonstration (les
+// clés stables sont dérivées des adresses e-mail / noms, jamais de valeurs
+// aléatoires relancées à chaque exécution).
 import { Algorithm, hash } from '@node-rs/argon2';
 import { PrismaClient } from '@prisma/client';
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const prisma = new PrismaClient();
 
 const DEMO_PASSWORD = 'DemoPassw0rd!2024';
+
+// --------------------------------------------------------------------------
+// Stockage privé des documents de démonstration.
+//
+// Le contenu binaire n'est JAMAIS stocké en base (métadonnées seules, voir
+// schema.prisma). On reproduit ici, sans dépendre du conteneur NestJS, le
+// contrat du stockage local : clé générée par le serveur, contenu écrit hors
+// répertoire public, empreinte SHA-256 pour l'intégrité. Le type MIME détecté
+// est vérifié par lecture des octets d'en-tête (magic bytes), comme le fait le
+// service réel.
+// --------------------------------------------------------------------------
+
+const DOCUMENT_STORAGE_ROOT = resolve(
+  process.env.DOCUMENT_STORAGE_DIR?.trim() ||
+    join(process.cwd(), 'storage', 'private-documents')
+);
+
+function resolveStorageKey(key) {
+  if (!key || key.includes('\0') || isAbsolute(key)) {
+    throw new Error('Invalid document storage key');
+  }
+  const candidate = resolve(DOCUMENT_STORAGE_ROOT, key);
+  const rel = relative(DOCUMENT_STORAGE_ROOT, candidate);
+  if (rel.length === 0 || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error('Invalid document storage key');
+  }
+  return candidate;
+}
+
+async function saveDocumentContent(key, content) {
+  const target = resolveStorageKey(key);
+  await mkdir(dirname(target), { recursive: true });
+  // flag "wx" : refuse d'écraser un contenu existant (clé censée unique).
+  await writeFile(target, content, { mode: 0o600, flag: 'wx' });
+}
+
+// En-tête PNG minimal (signature + IHDR valide) suivi de données fictives.
+// Suffisant pour que la détection par magic bytes reconnaisse image/png.
+function syntheticPng(seedText) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.from([
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // length + "IHDR"
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89
+  ]);
+  return Buffer.concat([signature, ihdr, Buffer.from(seedText, 'utf8')]);
+}
+
+function sha256Hex(content) {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function detectMimeType(content) {
+  if (
+    content.length >= 8 &&
+    content[0] === 0x89 &&
+    content[1] === 0x50 &&
+    content[2] === 0x4e &&
+    content[3] === 0x47
+  ) {
+    return 'image/png';
+  }
+  return null;
+}
+
+// Crée (ou retrouve) un document de démonstration. La clé de stockage est
+// dérivée d'un libellé stable pour rester idempotente entre deux exécutions.
+async function upsertDemoDocument({
+  medicalRecordId,
+  encounterId,
+  category,
+  originalName,
+  seedText,
+  uploadedByUserId,
+  uploaderDoctorProfileId
+}) {
+  const content = syntheticPng(seedText);
+  const detectedMimeType = detectMimeType(content);
+  if (!detectedMimeType) {
+    throw new Error(`Synthetic document ${originalName} has no detectable type`);
+  }
+  const checksumSha256 = sha256Hex(content);
+  const storageKey = `documents/demo/${createHash('sha256')
+    .update(originalName)
+    .digest('hex')
+    .slice(0, 32)}`;
+
+  const existing = await prisma.medicalDocument.findFirst({
+    where: { medicalRecordId, originalName }
+  });
+  if (existing) {
+    return existing;
+  }
+
+  // Écrit le contenu hors base (hors répertoire public). Si l'écriture échoue
+  // (contenu déjà présent sous la même clé), on tolère : la clé est stable.
+  await saveDocumentContent(storageKey, content).catch((error) => {
+    if (error && error.code !== 'EEXIST') {
+      throw error;
+    }
+  });
+
+  return prisma.medicalDocument.create({
+    data: {
+      medicalRecordId,
+      encounterId: encounterId ?? null,
+      category,
+      originalName,
+      storageKey,
+      declaredMimeType: detectedMimeType,
+      detectedMimeType,
+      sizeBytes: content.length,
+      checksumSha256,
+      uploadedByUserId,
+      uploaderDoctorProfileId: uploaderDoctorProfileId ?? null
+    }
+  });
+}
+
+// --------------------------------------------------------------------------
+// Référentiels
+// --------------------------------------------------------------------------
 
 const specialties = [
   { code: 'GENERAL_MEDICINE', labelFr: 'Medecine generale', labelAr: 'الطب العام' },
@@ -215,6 +345,10 @@ const facilities = [
   }))
 ];
 
+// --------------------------------------------------------------------------
+// Helpers d'idempotence
+// --------------------------------------------------------------------------
+
 async function upsertSpecialties() {
   for (const specialty of specialties) {
     await prisma.specialty.upsert({
@@ -226,7 +360,7 @@ async function upsertSpecialties() {
   return specialties.length;
 }
 
-async function upsertDemoUser({ email, phone }) {
+async function upsertUser({ email, phone }) {
   const passwordHash = await hash(DEMO_PASSWORD, {
     algorithm: Algorithm.Argon2id,
     memoryCost: 19456,
@@ -237,6 +371,14 @@ async function upsertDemoUser({ email, phone }) {
     where: { email },
     update: {},
     create: { email, phone, passwordHash }
+  });
+}
+
+async function grantRole(userId, role) {
+  await prisma.userRole.upsert({
+    where: { userId_role: { userId, role } },
+    update: {},
+    create: { userId, role }
   });
 }
 
@@ -272,50 +414,48 @@ async function seedFacilities() {
   return created;
 }
 
-async function seedDemoDoctor(facilitiesById) {
-  const user = await upsertDemoUser({
-    email: 'demo.doctor@sahatn.example',
-    phone: '+21620000001'
-  });
-  await prisma.userRole.upsert({
-    where: { userId_role: { userId: user.id, role: 'DOCTOR' } },
-    update: {},
-    create: { userId: user.id, role: 'DOCTOR' }
-  });
+async function upsertDoctor({
+  email,
+  phone,
+  displayName,
+  description,
+  specialtyCodes,
+  verificationStatus,
+  isPubliclyListed,
+  facilityName,
+  withCredential
+}) {
+  const user = await upsertUser({ email, phone });
+  await grantRole(user.id, 'DOCTOR');
 
   const profile = await prisma.doctorProfile.upsert({
     where: { userId: user.id },
     update: {},
     create: {
       userId: user.id,
-      displayName: 'Dr Mounir Trabelsi',
-      professionalDescription: 'Médecin généraliste de démonstration.',
+      displayName,
+      professionalDescription: description,
       languages: ['fr', 'ar'],
       yearsOfExperience: 12,
-      verificationStatus: 'VERIFIED',
-      isPubliclyListed: true
+      verificationStatus,
+      isPubliclyListed
     }
   });
 
-  const general = await prisma.specialty.findUnique({
-    where: { code: 'GENERAL_MEDICINE' }
-  });
-  const cardiology = await prisma.specialty.findUnique({
-    where: { code: 'CARDIOLOGY' }
-  });
-  for (const [specialtyId, isPrimary] of [
-    [general.id, true],
-    [cardiology.id, false]
-  ]) {
+  for (const [code, isPrimary] of specialtyCodes) {
+    const specialty = await prisma.specialty.findUnique({ where: { code } });
+    if (!specialty) {
+      continue;
+    }
     await prisma.doctorSpecialty.upsert({
       where: {
         doctorProfileId_specialtyId: {
           doctorProfileId: profile.id,
-          specialtyId
+          specialtyId: specialty.id
         }
       },
       update: { isPrimary },
-      create: { doctorProfileId: profile.id, specialtyId, isPrimary }
+      create: { doctorProfileId: profile.id, specialtyId: specialty.id, isPrimary }
     });
   }
 
@@ -328,51 +468,423 @@ async function seedDemoDoctor(facilitiesById) {
         doctorProfileId: profile.id,
         type: 'DIPLOMA',
         issuingBody: 'Faculté de médecine (fictive) de Tunis',
-        reference: 'DEMO-DIPLOME-2024',
-        verificationStatus: 'VERIFIED',
-        verifiedAt: new Date()
+        reference: `DEMO-DIPLOME-${email.split('@')[0].toUpperCase()}`,
+        verificationStatus: withCredential ? 'VERIFIED' : 'UNVERIFIED',
+        verifiedAt: withCredential ? new Date() : null
       }
     });
   }
 
-  const drill = await prisma.healthcareFacility.findFirst({
-    where: { displayName: 'Polyclinique Les Palmiers' }
-  });
-  if (drill) {
-    const active = await prisma.doctorFacilityAffiliation.findFirst({
-      where: {
-        doctorProfileId: profile.id,
-        facilityId: drill.id,
-        status: 'VERIFIED'
-      }
+  let affiliation = null;
+  if (facilityName) {
+    const facility = await prisma.healthcareFacility.findFirst({
+      where: { displayName: facilityName }
     });
-    if (!active) {
-      await prisma.doctorFacilityAffiliation.create({
-        data: {
+    if (facility) {
+      affiliation = await prisma.doctorFacilityAffiliation.findFirst({
+        where: {
           doctorProfileId: profile.id,
-          facilityId: drill.id,
-          status: 'VERIFIED',
-          requestedBy: user.id,
-          decidedBy: user.id,
-          decidedAt: new Date()
+          facilityId: facility.id,
+          status: 'VERIFIED'
         }
       });
+      if (!affiliation) {
+        affiliation = await prisma.doctorFacilityAffiliation.create({
+          data: {
+            doctorProfileId: profile.id,
+            facilityId: facility.id,
+            status: 'VERIFIED',
+            requestedBy: user.id,
+            decidedBy: user.id,
+            decidedAt: new Date()
+          }
+        });
+      }
     }
   }
 
-  return profile;
+  return { user, profile, affiliation };
 }
 
-async function seedDemoStaff(facilitiesById) {
-  const user = await upsertDemoUser({
+async function ensureSchedule(affiliation, confirmationMode) {
+  if (!affiliation) {
+    return null;
+  }
+  return prisma.appointmentSchedule.upsert({
+    where: { affiliationId: affiliation.id },
+    update: {},
+    create: {
+      affiliationId: affiliation.id,
+      timezone: 'Africa/Tunis',
+      visitDurationMinutes: 30,
+      confirmationMode
+    }
+  });
+}
+
+// Crée un créneau et son rendez-vous de démonstration. La clé d'idempotence du
+// rendez-vous est fixe (par patient) : rejouer le seed ne duplique rien.
+async function createDemoAppointment({
+  schedule,
+  patientUserId,
+  startsAt,
+  status,
+  reason,
+  idempotencyKey
+}) {
+  if (!schedule) {
+    return null;
+  }
+  const endsAt = new Date(startsAt.getTime() + 30 * 60 * 1000);
+  const slot = await prisma.appointmentSlot.upsert({
+    where: { scheduleId_startsAt: { scheduleId: schedule.id, startsAt } },
+    update: {},
+    create: {
+      scheduleId: schedule.id,
+      startsAt,
+      endsAt,
+      // Un rendez-vous annulé libère le créneau ; les autres le consomment.
+      status: status === 'CANCELLED' ? 'OPEN' : 'BOOKED'
+    }
+  });
+
+  const existing = await prisma.appointment.findUnique({
+    where: {
+      patientUserId_idempotencyKey: { patientUserId, idempotencyKey }
+    }
+  });
+  if (existing) {
+    return existing;
+  }
+
+  const requiresConfirmation = schedule.confirmationMode === 'MANUAL';
+  const appointment = await prisma.appointment.create({
+    data: {
+      slotId: slot.id,
+      patientUserId,
+      reason: reason ?? null,
+      requiresConfirmation,
+      status,
+      idempotencyKey
+    }
+  });
+
+  const events = [
+    { action: 'CREATED', fromStatus: null, toStatus: status === 'PENDING' ? 'PENDING' : status }
+  ];
+  if (status === 'CONFIRMED') {
+    events.push({ action: 'CONFIRMED', fromStatus: 'PENDING', toStatus: 'CONFIRMED' });
+  } else if (status === 'COMPLETED') {
+    events.push({ action: 'CONFIRMED', fromStatus: 'PENDING', toStatus: 'CONFIRMED' });
+    events.push({ action: 'COMPLETED', fromStatus: 'CONFIRMED', toStatus: 'COMPLETED' });
+  } else if (status === 'CANCELLED') {
+    events.push({ action: 'CANCELLED', fromStatus: 'PENDING', toStatus: 'CANCELLED' });
+  } else if (status === 'NO_SHOW') {
+    events.push({ action: 'CONFIRMED', fromStatus: 'PENDING', toStatus: 'CONFIRMED' });
+    events.push({ action: 'NO_SHOW_MARKED', fromStatus: 'CONFIRMED', toStatus: 'NO_SHOW' });
+  }
+
+  for (const event of events) {
+    await prisma.appointmentEvent.create({
+      data: {
+        appointmentId: appointment.id,
+        actorId: patientUserId,
+        action: event.action,
+        fromStatus: event.fromStatus,
+        toStatus: event.toStatus
+      }
+    });
+  }
+
+  return appointment;
+}
+
+async function enqueueNotification({
+  type,
+  recipientUserId,
+  dedupeKey,
+  appointmentId,
+  payload
+}) {
+  await prisma.notificationOutbox.upsert({
+    where: { dedupeKey },
+    update: {},
+    create: {
+      type,
+      recipientUserId,
+      appointmentId: appointmentId ?? null,
+      payload,
+      dedupeKey
+    }
+  });
+}
+
+// --------------------------------------------------------------------------
+// Dossier médical de démonstration
+// --------------------------------------------------------------------------
+
+const ALL_READ_WRITE_PERMISSIONS = [
+  'VIEW_RECORD',
+  'VIEW_ENCOUNTERS',
+  'VIEW_OBSERVATIONS',
+  'VIEW_DIAGNOSES',
+  'VIEW_ALLERGIES',
+  'VIEW_DOCUMENTS',
+  'WRITE_ENCOUNTERS',
+  'WRITE_OBSERVATIONS',
+  'WRITE_DIAGNOSES',
+  'WRITE_ALLERGIES',
+  'WRITE_DOCUMENTS'
+];
+
+async function ensureMedicalRecord(patientUserId) {
+  const existing = await prisma.medicalRecord.findUnique({
+    where: { patientUserId }
+  });
+  if (existing) {
+    return existing;
+  }
+  return prisma.$transaction(async (tx) => {
+    const created = await tx.medicalRecord.create({ data: { patientUserId } });
+    await tx.medicalRecordAccessEvent.create({
+      data: {
+        medicalRecordId: created.id,
+        actorUserId: patientUserId,
+        action: 'RECORD_CREATED',
+        purpose: 'PATIENT_SELF'
+      }
+    });
+    return created;
+  });
+}
+
+async function ensureGrant({
+  medicalRecordId,
+  doctorProfileId,
+  permissions,
+  reason,
+  grantedByUserId
+}) {
+  const existing = await prisma.medicalRecordGrant.findFirst({
+    where: { medicalRecordId, granteeDoctorProfileId: doctorProfileId, status: 'ACTIVE' }
+  });
+  if (existing) {
+    return existing;
+  }
+  return prisma.$transaction(async (tx) => {
+    const grant = await tx.medicalRecordGrant.create({
+      data: {
+        medicalRecordId,
+        granteeDoctorProfileId: doctorProfileId,
+        permissions,
+        effectiveAt: new Date(),
+        reason: reason ?? null,
+        grantedByUserId
+      }
+    });
+    await tx.medicalRecordGrantEvent.create({
+      data: {
+        grantId: grant.id,
+        action: 'GRANTED',
+        actorUserId: grantedByUserId,
+        reason: reason ?? null
+      }
+    });
+    await tx.medicalRecordAccessEvent.create({
+      data: {
+        medicalRecordId,
+        actorUserId: grantedByUserId,
+        action: 'GRANT_CREATED',
+        purpose: 'PATIENT_SELF',
+        targetType: 'MedicalRecordGrant',
+        targetId: grant.id
+      }
+    });
+    return grant;
+  });
+}
+
+async function ensureCareRelationship({
+  patientUserId,
+  doctorProfileId,
+  source
+}) {
+  const existing = await prisma.careRelationship.findFirst({
+    where: { patientUserId, doctorProfileId, status: 'ACTIVE' }
+  });
+  if (existing) {
+    return existing;
+  }
+  return prisma.careRelationship.create({
+    data: { patientUserId, doctorProfileId, source }
+  });
+}
+
+async function ensureEncounter({
+  medicalRecordId,
+  doctorProfileId,
+  facilityId,
+  appointmentId,
+  type,
+  occurredAt,
+  chiefComplaint,
+  notes
+}) {
+  if (appointmentId) {
+    const existing = await prisma.clinicalEncounter.findUnique({
+      where: { appointmentId }
+    });
+    if (existing) {
+      return existing;
+    }
+  }
+  const duplicate = await prisma.clinicalEncounter.findFirst({
+    where: {
+      medicalRecordId,
+      doctorProfileId,
+      occurredAt,
+      chiefComplaint: chiefComplaint ?? null
+    }
+  });
+  if (duplicate) {
+    return duplicate;
+  }
+  return prisma.$transaction(async (tx) => {
+    const created = await tx.clinicalEncounter.create({
+      data: {
+        medicalRecordId,
+        doctorProfileId,
+        facilityId: facilityId ?? null,
+        appointmentId: appointmentId ?? null,
+        type,
+        occurredAt,
+        chiefComplaint: chiefComplaint ?? null,
+        notes: notes ?? null
+      }
+    });
+    await tx.medicalRecordAccessEvent.create({
+      data: {
+        medicalRecordId,
+        actorUserId: null,
+        actorDoctorProfileId: doctorProfileId,
+        action: 'ENCOUNTER_CREATED',
+        purpose: 'EXPLICIT_GRANT',
+        targetType: 'ClinicalEncounter',
+        targetId: created.id
+      }
+    });
+    return created;
+  });
+}
+
+async function ensureObservation({
+  medicalRecordId,
+  encounterId,
+  doctorProfileId,
+  category,
+  code,
+  label,
+  valueText,
+  valueNumeric,
+  unit,
+  certainty,
+  observedAt
+}) {
+  const existing = await prisma.clinicalObservation.findFirst({
+    where: { medicalRecordId, doctorProfileId, label, observedAt }
+  });
+  if (existing) {
+    return existing;
+  }
+  return prisma.clinicalObservation.create({
+    data: {
+      medicalRecordId,
+      encounterId: encounterId ?? null,
+      doctorProfileId,
+      category,
+      code: code ?? null,
+      label,
+      valueText: valueText ?? null,
+      valueNumeric: valueNumeric ?? null,
+      unit: unit ?? null,
+      certainty: certainty ?? 'KNOWN',
+      observedAt
+    }
+  });
+}
+
+async function ensureDiagnosis({
+  medicalRecordId,
+  encounterId,
+  doctorProfileId,
+  code,
+  label,
+  description,
+  status,
+  diagnosedAt
+}) {
+  const existing = await prisma.clinicalDiagnosis.findFirst({
+    where: { medicalRecordId, doctorProfileId, label, diagnosedAt }
+  });
+  if (existing) {
+    return existing;
+  }
+  return prisma.clinicalDiagnosis.create({
+    data: {
+      medicalRecordId,
+      encounterId: encounterId ?? null,
+      doctorProfileId,
+      code: code ?? null,
+      label,
+      description: description ?? null,
+      status: status ?? 'PROVISIONAL',
+      diagnosedAt
+    }
+  });
+}
+
+async function ensureAllergy({
+  medicalRecordId,
+  doctorProfileId,
+  allergen,
+  reaction,
+  severity,
+  source,
+  certainty,
+  status,
+  recordedAt
+}) {
+  const existing = await prisma.patientAllergy.findFirst({
+    where: { medicalRecordId, allergen, recordedAt }
+  });
+  if (existing) {
+    return existing;
+  }
+  return prisma.patientAllergy.create({
+    data: {
+      medicalRecordId,
+      doctorProfileId,
+      allergen,
+      reaction: reaction ?? null,
+      severity: severity ?? null,
+      source: source ?? 'PROFESSIONAL_DOCUMENTED',
+      certainty: certainty ?? 'KNOWN',
+      status: status ?? 'ACTIVE',
+      recordedAt
+    }
+  });
+}
+
+// --------------------------------------------------------------------------
+// Orchestration
+// --------------------------------------------------------------------------
+
+async function seedDemoStaff() {
+  const user = await upsertUser({
     email: 'demo.staff@sahatn.example',
     phone: '+21620000002'
   });
-  await prisma.userRole.upsert({
-    where: { userId_role: { userId: user.id, role: 'FACILITY_STAFF' } },
-    update: {},
-    create: { userId: user.id, role: 'FACILITY_STAFF' }
-  });
+  await grantRole(user.id, 'FACILITY_STAFF');
 
   const hospital = await prisma.healthcareFacility.findFirst({
     where: { displayName: 'Hôpital universitaire Jabal Al-Fikr' }
@@ -393,12 +905,283 @@ async function seedDemoStaff(facilitiesById) {
 async function main() {
   const specialtyCount = await upsertSpecialties();
   const facilitiesById = await seedFacilities();
-  await seedDemoDoctor(facilitiesById);
-  await seedDemoStaff(facilitiesById);
+
+  // --- Praticiens ---------------------------------------------------------
+  const primaryDoctor = await upsertDoctor({
+    email: 'demo.doctor@sahatn.example',
+    phone: '+21620000001',
+    displayName: 'Dr Mounir Trabelsi',
+    description: 'Médecin généraliste de démonstration.',
+    specialtyCodes: [
+      ['GENERAL_MEDICINE', true],
+      ['CARDIOLOGY', false]
+    ],
+    verificationStatus: 'VERIFIED',
+    isPubliclyListed: true,
+    facilityName: 'Polyclinique Les Palmiers',
+    withCredential: true
+  });
+
+  const secondaryDoctor = await upsertDoctor({
+    email: 'demo.doctor2@sahatn.example',
+    phone: '+21620000003',
+    displayName: 'Dr Salma Ben Youssef',
+    description: 'Cardiologue de démonstration (profil en attente de vérification).',
+    specialtyCodes: [['CARDIOLOGY', true]],
+    verificationStatus: 'PENDING',
+    isPubliclyListed: false,
+    facilityName: 'Hôpital universitaire Jabal Al-Fikr',
+    withCredential: false
+  });
+
+  await seedDemoStaff();
+
+  // --- Patients -----------------------------------------------------------
+  const primaryPatient = await upsertUser({
+    email: 'demo.patient@sahatn.example',
+    phone: '+21620000010'
+  });
+  await grantRole(primaryPatient.id, 'PATIENT');
+
+  const secondaryPatient = await upsertUser({
+    email: 'demo.patient2@sahatn.example',
+    phone: '+21620000011'
+  });
+  await grantRole(secondaryPatient.id, 'PATIENT');
+
+  // --- Documents (stockage privé + SHA-256) --------------------------------
+  const primaryRecord = await ensureMedicalRecord(primaryPatient.id);
+  const secondaryRecord = await ensureMedicalRecord(secondaryPatient.id);
+
+  const doctorAffiliation = primaryDoctor.affiliation;
+  const facilityId = doctorAffiliation?.facilityId ?? null;
+
+  const schedule = await ensureSchedule(doctorAffiliation, 'MANUAL');
+
+  // --- Rendez-vous en états variés ----------------------------------------
+  // Ancre temporelle FIXE : indispensable pour que le seed reste idempotent.
+  // Des dates relatives à `Date.now()` créeraient de nouveaux créneaux et de
+  // nouvelles entrées cliniques à chaque exécution.
+  const now = new Date('2025-06-01T09:00:00.000Z');
+  const day = 24 * 60 * 60 * 1000;
+
+  const completedAppointment = await createDemoAppointment({
+    schedule,
+    patientUserId: primaryPatient.id,
+    startsAt: new Date(now.getTime() - 10 * day),
+    status: 'COMPLETED',
+    reason: 'Suivi de tension artérielle.',
+    idempotencyKey: 'demo-appointment-completed'
+  });
+  await enqueueNotification({
+    type: 'APPOINTMENT_COMPLETED',
+    recipientUserId: primaryPatient.id,
+    dedupeKey: 'demo-notif-appointment-completed',
+    appointmentId: completedAppointment?.id,
+    payload: { appointmentId: completedAppointment?.id ?? null }
+  });
+
+  const confirmedAppointment = await createDemoAppointment({
+    schedule,
+    patientUserId: primaryPatient.id,
+    startsAt: new Date(now.getTime() + 5 * day),
+    status: 'CONFIRMED',
+    reason: 'Consultation de contrôle.',
+    idempotencyKey: 'demo-appointment-confirmed'
+  });
+  await enqueueNotification({
+    type: 'APPOINTMENT_CONFIRMED',
+    recipientUserId: primaryPatient.id,
+    dedupeKey: 'demo-notif-appointment-confirmed',
+    appointmentId: confirmedAppointment?.id,
+    payload: { appointmentId: confirmedAppointment?.id ?? null }
+  });
+
+  await createDemoAppointment({
+    schedule,
+    patientUserId: primaryPatient.id,
+    startsAt: new Date(now.getTime() + 12 * day),
+    status: 'PENDING',
+    reason: 'Nouvelle consultation.',
+    idempotencyKey: 'demo-appointment-pending'
+  });
+
+  await createDemoAppointment({
+    schedule,
+    patientUserId: secondaryPatient.id,
+    startsAt: new Date(now.getTime() - 3 * day),
+    status: 'CANCELLED',
+    reason: 'Rendez-vous annulé par le patient.',
+    idempotencyKey: 'demo-appointment-cancelled'
+  });
+
+  await createDemoAppointment({
+    schedule,
+    patientUserId: secondaryPatient.id,
+    startsAt: new Date(now.getTime() - 20 * day),
+    status: 'NO_SHOW',
+    reason: 'Patient absent.',
+    idempotencyKey: 'demo-appointment-noshow'
+  });
+
+  // --- Consentement (autorisation) ----------------------------------------
+  // Le patient principal consent un accès complet au praticien vérifié.
+  await ensureGrant({
+    medicalRecordId: primaryRecord.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    permissions: ALL_READ_WRITE_PERMISSIONS,
+    reason: 'Consentement de démonstration (accès complet).',
+    grantedByUserId: primaryPatient.id
+  });
+  await ensureCareRelationship({
+    patientUserId: primaryPatient.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    source: 'PATIENT_GRANT'
+  });
+
+  // Le médecin non vérifié (PENDING) ne reçoit AUCUN consentement : il ne doit
+  // jamais accéder à un dossier. Le second patient n'a accordé aucun accès :
+  // le praticien ne peut pas le voir (démonstration du cloisonnement).
+
+  // --- Dossier clinique du patient principal ------------------------------
+  const encounter1 = await ensureEncounter({
+    medicalRecordId: primaryRecord.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    facilityId,
+    appointmentId: completedAppointment?.id,
+    type: 'CONSULTATION',
+    occurredAt: new Date(now.getTime() - 10 * day),
+    chiefComplaint: 'Céphalées occasionnelles et fatigue.',
+    notes: 'Examen clinique sans anomalie majeure. Réévaluation conseillée.'
+  });
+
+  await ensureObservation({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    category: 'VITAL_SIGN',
+    code: 'SYSTOLIC_BP',
+    label: 'Tension artérielle systolique',
+    valueNumeric: 128,
+    unit: 'mmHg',
+    observedAt: new Date(now.getTime() - 10 * day)
+  });
+  await ensureObservation({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    category: 'VITAL_SIGN',
+    code: 'DIASTOLIC_BP',
+    label: 'Tension artérielle diastolique',
+    valueNumeric: 82,
+    unit: 'mmHg',
+    observedAt: new Date(now.getTime() - 10 * day)
+  });
+  await ensureObservation({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    category: 'LABORATORY',
+    code: 'HBA1C',
+    label: 'Hémoglobine glyquée (HbA1c)',
+    valueNumeric: 5.6,
+    unit: '%',
+    observedAt: new Date(now.getTime() - 10 * day)
+  });
+  await ensureObservation({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    category: 'SYMPTOM',
+    label: 'Aucune allergie connue rapportée',
+    certainty: 'NEGATED',
+    observedAt: new Date(now.getTime() - 10 * day)
+  });
+
+  await ensureDiagnosis({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    code: 'R51',
+    label: 'Céphalée',
+    description: 'Céphalée primaire sans signe d’alarme.',
+    status: 'CONFIRMED',
+    diagnosedAt: new Date(now.getTime() - 10 * day)
+  });
+
+  await ensureAllergy({
+    medicalRecordId: primaryRecord.id,
+    doctorProfileId: primaryDoctor.profile.id,
+    allergen: 'Pénicilline',
+    reaction: 'Éruption cutanée',
+    severity: 'MODERATE',
+    source: 'PATIENT_REPORTED',
+    certainty: 'KNOWN',
+    status: 'ACTIVE',
+    recordedAt: new Date(now.getTime() - 10 * day)
+  });
+
+  // --- Documents du dossier (métadonnées + contenu hors base) -------------
+  await upsertDemoDocument({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    category: 'REPORT',
+    originalName: 'compte-rendu-consultation-demo.png',
+    seedText: 'Compte rendu de consultation fictif (démonstration).',
+    uploadedByUserId: primaryDoctor.user.id,
+    uploaderDoctorProfileId: primaryDoctor.profile.id
+  });
+  await upsertDemoDocument({
+    medicalRecordId: primaryRecord.id,
+    encounterId: encounter1.id,
+    category: 'LAB_RESULT',
+    originalName: 'resultat-biologie-demo.png',
+    seedText: 'Résultat de biologie fictif (démonstration).',
+    uploadedByUserId: primaryDoctor.user.id,
+    uploaderDoctorProfileId: primaryDoctor.profile.id
+  });
+  await upsertDemoDocument({
+    medicalRecordId: primaryRecord.id,
+    category: 'PRESCRIPTION',
+    originalName: 'ordonnance-demo.png',
+    seedText: 'Ordonnance fictive (démonstration).',
+    uploadedByUserId: primaryPatient.id,
+    uploaderDoctorProfileId: null
+  });
+
+  await prisma.medicalRecordAccessEvent.create({
+    data: {
+      medicalRecordId: primaryRecord.id,
+      actorUserId: primaryPatient.id,
+      action: 'DOCUMENT_UPLOADED',
+      purpose: 'PATIENT_SELF',
+      targetType: 'MedicalDocument',
+      targetId: null
+    }
+  });
+
+  // --- Trace d'un accès refusé (démonstration d'auditabilité) -------------
+  // Le praticien non vérifié tente d'accéder au dossier : refus journalisé.
+  await prisma.medicalRecordAccessEvent.create({
+    data: {
+      medicalRecordId: primaryRecord.id,
+      actorUserId: secondaryDoctor.user.id,
+      actorDoctorProfileId: secondaryDoctor.profile.id,
+      action: 'ACCESS_DENIED',
+      purpose: 'EXPLICIT_GRANT',
+      reason: 'unverified_profile'
+    }
+  });
+
+  // Le second patient garde un dossier vide (aucune donnée clinique) : utile
+  // pour démontrer qu'un médecin sans consentement ne voit rien.
+  void secondaryRecord;
+
   console.log(
     `Seeded ${specialtyCount} demonstration specialties, ` +
       `${facilitiesById.length} demonstration facilities, ` +
-      'demo doctor and demo staff accounts.'
+      '3 demo doctors/staff accounts, 2 demo patients, appointments, ' +
+      'consents, a clinical record and synthetic documents.'
   );
   console.log(`Demo accounts password: ${DEMO_PASSWORD}`);
 }
