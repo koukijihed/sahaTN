@@ -14,14 +14,16 @@
 | --- | --- |
 | Dépôt | `https://github.com/koukijihed/sahaTN` (visibilité **PUBLIC**) |
 | Branche | `main` (seule branche ; pas de stash) |
-| HEAD local | `beba9848` (documents poussés) ; travail post-audit local non encore committé |
-| `origin/main` | `beba9848` (à jour du dernier push ; STEP 4/5 non encore poussés) |
+| HEAD local | `35a7dad1` (post-audit : en-têtes de sécurité, démo, seed, runbook) |
+| `origin/main` | `35a7dad1` (à jour — poussé) |
 | Client Git | Git 2.55 (`C:\Program Files\Git\bin`) |
 | Auth | `gh` CLI 2.102 **authentifié** (`koukijihed`, scopes `repo`,`workflow`,`gist`,`read:org`) ; helper `manager` |
-| Travail non versionné | `docs/SAHATN_COMPLETE_AUDIT.md` (nouveau) ; dossiers de build ignorés (`node_modules/`, `dist/`, `.next/`, `.dev-postgres/`) ; `frontend/.gitignore`, `tsconfig.tsbuildinfo` |
+| Travail non versionné | aucun commit en attente ; dossiers de build ignorés (`node_modules/`, `dist/`, `.next/`, `.dev-postgres/`, `backend/.env`) — `.gitignore` corrigé (UTF-8) |
 
 **Historique** : `d5c4e46b` (plateforme initiale) → `54d91bef` (blueprint Render
-backend-only, suppression du `vercel.json` racine obsolète).
+backend-only, suppression du `vercel.json` racine obsolète) → `beba9848` (audit
+complet + préparation déploiement) → `35a7dad1` (remédiation post-audit, seed de
+démo, runbook de déploiement).
 
 ---
 

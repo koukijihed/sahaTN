@@ -18,6 +18,11 @@ professionnels vérifiés, comptes rendus médicaux et historique médical longi
 > volontairement hors périmètre (MFA, envoi réel d'e-mails/SMS, prescriptions,
 > sauvegardes, déploiement automatisé) : voir [`docs/roadmap.md`](docs/roadmap.md)
 > et [`docs/ci.md`](docs/ci.md).
+>
+> **Mode démonstration** : SahaTN est exposé comme **prototype de démonstration à
+> données synthétiques uniquement** (bandeau visible dans l'UI). Aucune donnée
+> médicale réelle, aucun usage clinique. Voir [`docs/DEMO_MODE.md`](docs/DEMO_MODE.md)
+> et le runbook [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ---
 
