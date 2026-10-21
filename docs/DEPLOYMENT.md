@@ -215,3 +215,48 @@ Ne jamais publier ces identifiants et ne jamais les committer.
 
 Pour valider sans cloud : `deploy.ps1` (Postgres embarqué 55435, `node dist/main`
 + `next start`). Outil **local** uniquement, pas un artefact cloud.
+
+---
+
+## 11. Fiche Render exacte (création dashboard)
+
+Valeurs à saisir telles quelles (le `render.yaml` racine les reflète) :
+
+| Réglage | Valeur |
+| --- | --- |
+| Repository | `https://github.com/koukijihed/sahaTN` |
+| Branch | `main` |
+| Root Directory | `backend` |
+| Runtime | Node |
+| Plan | Free |
+| Build Command | `npm ci --include=dev && npx prisma generate && npm run build && npx prisma migrate deploy` |
+| Start Command | `npm run start:prod` |
+| Health Check Path | `/api/health` |
+| Auto-Deploy | On commit |
+
+Variables d'environnement (non secrètes sauf indication) :
+
+| Clé | Valeur | Secret |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | Non |
+| `SAHATN_DEMO_SEED` | `0` | Non |
+| `API_PREFIX` | `api` | Non |
+| `CORS_ORIGIN` | `https://sahatn.vercel.app` | Non |
+| `ENABLE_API_DOCS` | `false` | Non |
+| `DATABASE_URL` | *(chaîne Neon `sahatn-demo`, `?sslmode=require`)* | **Oui** |
+| `SESSION_COOKIE_NAME` | `sahatn_session` | Non |
+| `CSRF_COOKIE_NAME` | `sahatn_csrf` | Non |
+| `SESSION_TTL_SECONDS` | `604800` | Non |
+| `COOKIE_DOMAIN` | *(vide)* | Non |
+| `LOGIN_MAX_ATTEMPTS` | `5` | Non |
+| `LOGIN_LOCK_MINUTES` | `15` | Non |
+| `DOCUMENT_MAX_FILE_BYTES` | `5242880` | Non |
+| `DOCUMENT_STORAGE_DIR` | *(vide)* | Non |
+
+> Migrations : déjà appliquées sur la base Neon `sahatn-demo` ; le
+> `migrate deploy` au build est donc un **no-op** (idempotent) et ne détruit
+> aucune donnée. **Le seed n'est pas rejoué au build** (déjà chargé, §2).
+
+Après déploiement, vérifier `GET https://<service>.onrender.com/api/health` →
+`200`, puis aligner `API_URL` côté Vercel sur cette URL et redéployer le frontend
+(§6, READY-2).

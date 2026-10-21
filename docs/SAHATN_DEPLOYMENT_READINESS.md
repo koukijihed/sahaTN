@@ -14,16 +14,29 @@
 | --- | --- |
 | Dépôt | `https://github.com/koukijihed/sahaTN` (visibilité **PUBLIC**) |
 | Branche | `main` (seule branche ; pas de stash) |
-| HEAD local | `13d4f163` (docs readiness/README) → **+ corrections de cette passe** |
-| `origin/main` | `13d4f163` (à jour du dernier push ; corrections de cette passe non encore poussées) |
+| HEAD local | `9cc210de` (contrôle du seed, garde-fou, build Render) |
+| `origin/main` | `9cc210de` (à jour — poussé) |
 | Client Git | Git 2.55 (`C:\Program Files\Git\bin`) |
 | Auth | `gh` CLI 2.102 **authentifié** (`koukijihed`, scopes `repo`,`workflow`,`gist`,`read:org`) ; helper `manager` |
-| Travail non versionné | aucun commit en attente ; dossiers de build ignorés (`node_modules/`, `dist/`, `.next/`, `.dev-postgres/`, `backend/.env`) — `.gitignore` corrigé (UTF-8) |
+| Travail non versionné | aucun commit en attente ; dossiers de build ignorés — `.gitignore` corrigé (UTF-8) |
 
 **Historique** : `d5c4e46b` (plateforme initiale) → `54d91bef` (blueprint Render
 backend-only, suppression du `vercel.json` racine obsolète) → `beba9848` (audit
 complet + préparation déploiement) → `35a7dad1` (remédiation post-audit, seed de
-démo, runbook de déploiement) → `13d4f163` (readiness/README).
+démo, runbook de déploiement) → `13d4f163` (readiness/README) → `9cc210de`
+(seed contrôlé, garde-fou, build Render).
+
+---
+
+## 1bis. État de déploiement vérifié (2026-10-21, outils réels)
+
+| Composant | État vérifié | Détail |
+| --- | --- | --- |
+| **GitHub** | DONE | `main` @ `9cc210de`, arbre propre, dépôt **PUBLIC** (inchangé, non autorisé à passer privé) |
+| **Neon** | DONE | Projet dédié **`sahatn-demo`** créé (eu-central-1, PG 18) ; 9 migrations appliquées ; seed synthétique chargé et **vérifié** : users 5, doctors 2, facilities 24, specialties 36, appointments 5, events 11, records 2, encounters 1, documents 3, notifications 2 |
+| **Render** | **BLOCKED** | Aucun CLI/API key ; `https://sahatn-backend.onrender.com` renvoie **404** → service inexistant. Création dashboard par l'opérateur requise |
+| **Vercel** | PARTIEL | Projet `sahatn` **live** : `https://sahatn.vercel.app` → **HTTP 200** (build démo, CSP présente), racine `frontend`, dépôt GitHub **déjà connecté**. Mais `API_URL` pointe vers le backend Render **inexistant** → appels API en échec |
+| **Stockage documents** | Limitation | Éphémère sur Render ; plan S3-compatible : [PLAN-stockage-objet-documents.md](PLAN-stockage-objet-documents.md) |
 
 ---
 
@@ -97,14 +110,14 @@ Vercel (Next.js)  ──rewrite /api/:path*──►  Render (NestJS, /api)
 
 | ID | Bloqueur | Type | Action requise |
 | --- | --- | --- | --- |
-| READY-1 | Base PostgreSQL managée inexistante | Manuel (compte) | Créer un projet Neon, récupérer `DATABASE_URL` avec `?sslmode=require` |
-| READY-2 | `CORS_ORIGIN` / `API_URL` non renseignés | Config | Renseigner l'URL Vercel côté Render et l'URL Render côté Vercel **après** déploiement (voir [DEPLOYMENT.md](DEPLOYMENT.md)) |
-| READY-3 | Service Render non créé | Manuel (compte) | Créer le service via le blueprint `render.yaml` |
-| READY-4 | Projet Vercel non créé | Manuel (compte) | Importer le dépôt GitHub sur Vercel, racine `frontend/` |
-| READY-5 | Contenu des documents non persistant (stockage local sur FS éphémère Render) | Code | Limitation **documentée** ([DEPLOYMENT.md](DEPLOYMENT.md) §5) ; adapter d'objet externe (S3-compatible) pour un usage durable — DEP-5 |
+| READY-1 | ~~Base PostgreSQL managée inexistante~~ **RÉSOLU** | — | Projet Neon `sahatn-demo` créé, migré et seedé (voir §1bis) |
+| READY-2 | `CORS_ORIGIN` (Render) / `API_URL` (Vercel) à aligner | Config | Après création Render : `API_URL` Vercel = URL Render, puis `CORS_ORIGIN` Render = `https://sahatn.vercel.app`, puis redéploiement |
+| READY-3 | Service Render non créé | Manuel (compte) | Créer le service via le blueprint `render.yaml` (dashboard) ; définir `DATABASE_URL` (Neon) et `CORS_ORIGIN` |
+| READY-4 | ~~Projet Vercel non créé~~ **PARTIEL** | — | Projet `sahatn` existe et est live (`https://sahatn.vercel.app`), dépôt déjà connecté ; reste à corriger `API_URL` (READY-2) |
+| READY-5 | Contenu des documents non persistant (stockage local sur FS éphémère Render) | Code | Limitation **documentée** ; plan S3-compatible : [PLAN-stockage-objet-documents.md](PLAN-stockage-objet-documents.md) — DEP-5 |
 | READY-6 | `Secure` cookies dépend de `NODE_ENV` sans `trust proxy` | Code/config | `secure` est piloté par `NODE_ENV=production` (et non `req.secure`) → correct derrière le proxy TLS ; DEP-2 |
 | READY-7 | MFA/2FA et chiffrement au repos non implémentés | Code (P0) | Reste ouvert ; prototype **démo uniquement** (STEP 3) |
-| READY-9 | Visibilité dépôt = PUBLIC (non demandée) | Manuel (compte) | Passer en privé sauf autorisation explicite |
+| READY-9 | Visibilité dépôt = PUBLIC | Manuel (compte) | **Opérateur a choisi de rester PUBLIC** ; risque documenté (données 100 % synthétiques) |
 
 ---
 
@@ -127,3 +140,4 @@ Vercel (Next.js)  ──rewrite /api/:path*──►  Render (NestJS, /api)
 | 2026-10-21 | Création du document. Git inspecté (`main` = `54d91bef`, à jour). `gh` authentifié. Autorité des fichiers de déploiement clarifiée. Bloqueurs READY-1..9 identifiés. |
 | 2026-10-21 | Post-audit : en-têtes de sécurité (SEC-5/SEC-6), bandeau de démo (STEP 3), seed complet idempotent (STEP 4 DONE), runbook [DEPLOYMENT.md](DEPLOYMENT.md). `render.yaml` exécute désormais le seed au build. READY-8 résolu. Compteurs de tests actualisés : unit 204, e2e 121, Playwright 43. |
 | 2026-10-21 | **Seed retiré du build Render** : migrations seules au build ; seed = action explicite contrôlée. **Garde-fou seed** (`SAHATN_DEMO_SEED=1`, sinon refus sans écriture) + événement d'audit `ACCESS_DENIED` rendu idempotent. Limitation du stockage documents explicitée ; tableau de variables d'environnement et vérifications post-déploiement ajoutés ([DEPLOYMENT.md](DEPLOYMENT.md)). |
+| 2026-10-21 | **Déploiement : état réel inspecté** (neonctl/vercel CLI/gh). Projet Neon **`sahatn-demo`** créé + migré + seedé (compteurs vérifiés). Vercel `sahatn` **live** (`https://sahatn.vercel.app`, HTTP 200). Render **absent** (404). READY-1 résolu, READY-4 partiel, READY-3 bloque. Plan stockage objet ajouté ([PLAN-stockage-objet-documents.md](PLAN-stockage-objet-documents.md)). |
