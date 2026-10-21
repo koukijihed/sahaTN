@@ -107,6 +107,11 @@ reconnaisse `image/png`.
 
 ## 5. Rejouer le seed
 
+> **Garde-fou** : le seed **refuse par défaut** de s'exécuter. Il exige
+> `SAHATN_DEMO_SEED=1` (opt-in explicite) ou `NODE_ENV=test` (harnais de tests).
+> Il ne doit viser qu'une **base de démonstration** désignée. Voir
+> [DEPLOYMENT.md](DEPLOYMENT.md) §2.
+
 ```powershell
 # Depuis backend/ — base de développement persistante (port 55434)
 npm run dev:db
@@ -115,12 +120,14 @@ npm run dev:db
 ou, sur une base déjà migrée :
 
 ```powershell
-# Depuis backend/ — nécessite DATABASE_URL
+# Depuis backend/ — nécessite DATABASE_URL ; le script autorise le seed
+# (SAHATN_DEMO_SEED=1) car c'est une action locale explicite sur base jetable.
 npm run db:seed
 ```
 
 Le seed peut être exécuté un nombre quelconque de fois : les compteurs de lignes
-restent stables.
+restent stables (y compris l'événement d'audit `ACCESS_DENIED`, désormais écrit
+de façon idempotente).
 
 ---
 

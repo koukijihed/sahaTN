@@ -14,6 +14,12 @@ const databaseDir = externalUrl
 let pg = null;
 let databaseUrl = externalUrl;
 const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || 'development' };
+// `db seed` est une action explicite de l'operateur sur une base locale
+// jetable : on autorise le garde-fou du seed (voir prisma/seed.mjs). Les
+// autres commandes (migrate, studio) n'en ont pas besoin.
+if (/\bdb\s+seed\b/.test(prismaArgs)) {
+  env.SAHATN_DEMO_SEED = '1';
+}
 
 try {
   if (!externalUrl) {

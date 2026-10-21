@@ -9,12 +9,21 @@ services:
     rootDir: backend
     plan: free
     autoDeployTrigger: commit
-    buildCommand: npm ci && npx prisma generate && npm run build && npx prisma migrate deploy && npx prisma db seed
+    # NODE_ENV=production est present pendant le build Render : sans
+    # --include=dev, `npm ci` omet les devDependencies (nest CLI, prisma CLI,
+    # typescript) et le build echoue. On force donc l'installation complete.
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build && npx prisma migrate deploy
     startCommand: npm run start:prod
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      # Garde-fou du seed de demonstration. Laisser "0" en exploitation
+      # normale : le seed refuse de s'executer (aucune ecriture). Le passer
+      # temporairement a "1" UNIQUEMENT pendant l'execution controlee du seed
+      # de demonstration (voir docs/DEPLOYMENT.md), puis revenir a "0".
+      - key: SAHATN_DEMO_SEED
+        value: "0"
       - key: API_PREFIX
         value: api
       # URL publique du frontend (Vercel). Renseigner après déploiement.

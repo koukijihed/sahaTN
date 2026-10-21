@@ -14,6 +14,41 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
+// --------------------------------------------------------------------------
+// GARDE-FOU : ce seed ne doit s'executer QUE sur une base de DEMONSTRATION
+// explicitement designee. Toutes les donnees sont fictives (ADR-0007), mais
+// une execution accidentelle contre une base inconnue ou de production
+// introduirait des comptes et donnees de demonstration la ou ils n'ont rien a
+// faire. On adopte donc une politique « refuse par defaut, opt-in explicite ».
+//
+// Autorise uniquement si AU MOINS une de ces conditions est vraie :
+//   - SAHATN_DEMO_SEED = 1 (ou true)           -> opt-in explicite (Render,
+//                                                  execution manuelle controlee,
+//                                                  script `npm run db:seed`).
+//   - NODE_ENV = test                          -> harnais e2e/navigateur
+//                                                  (base ephemere jetable).
+// Sinon le seed s'arrete immediatement (code de sortie != 0) sans rien ecrire.
+// Cela protege notamment NODE_ENV=production : meme avec DATABASE_URL renseigne,
+// aucun seed ne se declenche sans SAHATN_DEMO_SEED=1.
+// --------------------------------------------------------------------------
+function isDemoSeedAuthorized() {
+  const optIn = (process.env.SAHATN_DEMO_SEED || '').trim().toLowerCase();
+  if (optIn === '1' || optIn === 'true' || optIn === 'yes') {
+    return true;
+  }
+  return process.env.NODE_ENV === 'test';
+}
+
+if (!isDemoSeedAuthorized()) {
+  console.error(
+    '[seed] Refus : le seed de demonstration ne s\'execute que sur une base ' +
+      'synthetique explicitement designee. Definir SAHATN_DEMO_SEED=1 pour ' +
+      'autoriser (ou NODE_ENV=test dans le harnais de tests). Aucune donnee ' +
+      "n'a ete ecrite."
+  );
+  process.exit(1);
+}
+
 const prisma = new PrismaClient();
 
 const DEMO_PASSWORD = 'DemoPassw0rd!2024';
@@ -1160,18 +1195,30 @@ async function main() {
     }
   });
 
-  // --- Trace d'un accès refusé (démonstration d'auditabilité) -------------
-  // Le praticien non vérifié tente d'accéder au dossier : refus journalisé.
-  await prisma.medicalRecordAccessEvent.create({
-    data: {
+  // --- Trace d'un acces refuse (demonstration d'auditabilite) -------------
+  // Le praticien non verifie tente d'acceder au dossier : refus journalise.
+  // La table est append-only AUCUNE mise a jour possible : on garde donc le
+  // seed idempotent en n'ecrivant l'evenement que s'il n'existe pas deja
+  // (sinon chaque re-execution du seed empilerait un doublon d'audit).
+  const existingDenial = await prisma.medicalRecordAccessEvent.findFirst({
+    where: {
       medicalRecordId: primaryRecord.id,
       actorUserId: secondaryDoctor.user.id,
-      actorDoctorProfileId: secondaryDoctor.profile.id,
-      action: 'ACCESS_DENIED',
-      purpose: 'EXPLICIT_GRANT',
-      reason: 'unverified_profile'
+      action: 'ACCESS_DENIED'
     }
   });
+  if (!existingDenial) {
+    await prisma.medicalRecordAccessEvent.create({
+      data: {
+        medicalRecordId: primaryRecord.id,
+        actorUserId: secondaryDoctor.user.id,
+        actorDoctorProfileId: secondaryDoctor.profile.id,
+        action: 'ACCESS_DENIED',
+        purpose: 'EXPLICIT_GRANT',
+        reason: 'unverified_profile'
+      }
+    });
+  }
 
   // Le second patient garde un dossier vide (aucune donnée clinique) : utile
   // pour démontrer qu'un médecin sans consentement ne voit rien.
